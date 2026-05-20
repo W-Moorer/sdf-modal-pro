@@ -38,6 +38,10 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 ## 3. 摘要大纲
 
+中心论证句：
+
+> 对移动接触柔性体，本文证明 SDF 驱动的补丁剩余坐标可以在主动态状态维度不变的前提下恢复局部接触柔度，并通过静态完备性、SDF 到补丁载荷守恒、移动接触平滑性和 CalculiX 三方验证支撑该结论；当前范围限于无摩擦法向接触。
+
 第一段：问题与缺口。
 
 - 柔性多体系统中的移动接触需要同时描述整体动力学和局部表面柔度。
@@ -55,6 +59,7 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 第三段：验证证据。
 
 - 通过静态完备性、SDF 映射、准静态接触、移动接触、CalculiX 三方验证和 scaling estimate 进行验证。
+- 报告最能支撑摘要结论的硬数字：静态完备性误差 `2.180325e-17`；低阶模态准静态力误差 `0.831666`，补丁剩余 ILC 恢复到 `0`；移动接触 force jump `0.019911`，gap jump `0.00897824`；非线性接触中 Python full FEM vs CalculiX 位移相对误差 `0.005014`；patch alpha DOFs `40`，低于 node-level contact DOFs `69`。
 - 建立全阶 FEM、自适应 ROM 和外部开源 FEM 求解器的三方验证路线，用于降低同源代码自证的风险。
 - 消融对比作为内部一致性检查和附录材料，不在正文中单独设置验收式章节。
 
@@ -81,6 +86,10 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 ### 1 引言
 
+中心论证句：
+
+> 本文研究的问题不是一般 CMS 是否有效，而是当接触区域沿三角网格表面移动时，如何在不改变主动态系统维度的前提下恢复局部接触柔度并保持接触载荷转移平滑。
+
 1. 移动接触柔性体需要同时保留整体动力学响应和局部表面响应。
 2. 全阶 FEM 精度高，但当接触区域在细分表面上移动时，时间积分和接触搜索成本很高。
 3. 低阶模态 ROM 计算高效，但不能准确表达局部接触柔度。
@@ -105,7 +114,14 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 预期图：
 
-- `method_pipeline.png`：FEM 网格 -> SDF 表面查询 -> 表面补丁 -> 面积加权补丁载荷基 -> 补丁剩余 ILC -> 活动集合 -> 数值验证。
+- `method_pipeline.png` 应设计成主叙事图，而不是简单流程图。
+- 图型：schematic-led composite。
+- Panel a：full FEM moving-contact problem，显示局部接触区域沿柔性体表面移动。
+- Panel b：SDF query，将接触采样点映射到最近表面三角形、gap 和 normal。
+- Panel c：surface triangles 聚合到 patch load basis，突出面积加权和总法向力守恒。
+- Panel d：patch residual modes 恢复低阶模态遗漏的局部静态柔度。
+- Panel e：active patch ILC 位于主 DAE 状态之外，活动补丁变化不改变主动态维度。
+- Panel f：validation ladder，依次显示 static completeness -> SDF projection -> quasistatic contact -> moving contact -> CalculiX three-way -> scaling estimate。
 
 #### 2.2 局部接触响应的收敛判据
 
@@ -230,7 +246,9 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 #### 6.1 静态完备性验证
 
-目的：证明补丁载荷驱动的剩余模态可以恢复补丁载荷下的静态附着响应。
+Claim-first 开头句：
+
+> 为了检验补丁载荷驱动的剩余模态是否可以恢复全阶静态附着响应，我们比较全阶静态响应、保留模态静态贡献和补丁剩余修正后的重构误差。
 
 指标：
 
@@ -245,7 +263,9 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 #### 6.2 SDF 到补丁载荷投影验证
 
-目的：证明 SDF 接触采样能够稳定映射为活动补丁 ILC，并保持等效接触载荷的一致性。
+Claim-first 开头句：
+
+> 为了检验 SDF 接触采样是否能够稳定映射为活动补丁 ILC，我们构造单补丁、跨补丁边界和无接触三类采样，并检查活动补丁数、等效总力和主动态维度贡献。
 
 算例：
 
@@ -272,7 +292,9 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 #### 6.3 准静态接触验证
 
-目的：证明局部接触刚度可以被恢复，并区分低阶模态、普通静态模态和补丁剩余 ILC。
+Claim-first 开头句：
+
+> 为了检验补丁剩余 ILC 是否恢复低阶模态遗漏的局部接触刚度，我们在准静态压入算例中比较低阶模态、普通补丁静态模态和补丁剩余 ILC 的力-位移响应。
 
 对比模型：
 
@@ -296,7 +318,9 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 #### 6.4 移动接触验证
 
-目的：证明 SDF 活动补丁检测可以处理跨补丁边界的移动接触。
+Claim-first 开头句：
+
+> 为了检验活动补丁集合变化是否会引入不连续接触响应，我们让接触区域跨越补丁边界移动，并测量接触力、间隙、活动补丁数量和能量漂移。
 
 指标：
 
@@ -314,7 +338,9 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 #### 6.5 CalculiX 三方验证
 
-目的：避免“全阶 FEM 和 ROM 同源实现互相证明”的问题，用外部开源求解器验证主要时程曲线和非线性接触响应。
+Claim-first 开头句：
+
+> 为了检验本文结果是否不仅是项目内全阶 FEM 和 ROM 的同源一致性，我们将自适应 ROM、项目内全阶 FEM 和 CalculiX 外部全阶 FEM 在动力学和非线性接触算例中进行三方对比。
 
 对比对象：
 
@@ -352,7 +378,9 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 #### 6.6 Scaling estimate 与活动补丁代价分析
 
-目的：在不声称完整工业 wall-time benchmark 的前提下，估计活动补丁策略对求解器维度、接触坐标规模和运行代价的影响。
+Claim-first 开头句：
+
+> 为了检验活动补丁策略是否降低接触坐标规模和求解代价来源，我们比较全补丁、节点级 ILC、粗补丁和多尺度活动补丁的自由度、runtime proxy 和 memory proxy。
 
 对比对象：
 
@@ -406,7 +434,7 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 ### 图
 
-1. `method_pipeline.png`：方法总览，突出 SDF -> patch load basis -> residual ILC -> active set。
+1. `method_pipeline.png`：主叙事图，采用 schematic-led composite，串联 full FEM moving contact、SDF query、patch load basis、residual modes、active ILC outside DAE 和 validation ladder。
 2. `patch_hierarchy.png`：粗/中/细补丁层级和重叠区域。
 3. `sdf_patch_projection_map.png`：SDF 接触采样映射到活动补丁 ILC 的算例证据。
 4. `force_displacement_curve.png`：准静态接触力-位移对比。
@@ -447,5 +475,7 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 - 剩余模态是否被定义为补丁载荷静态附着响应减去保留模态静态贡献？
 - alpha 是否始终被描述为活动补丁界面载荷坐标，而不是动态状态？
 - 摘要和引言中的每个结论点是否都能映射到数值算例、附录对比或三方外部 FEM 验证输出？
+- 第 6 节每个结果小节是否以 “为了检验……我们……” 的 claim-first 句式开头？
+- 图 1 是否是主叙事图，而不是只列模块名称的简单流程图？
 - 所有图表是否都服务于核心结论，而不是泛泛展示程序结果？
 - 局限性是否足够明确：无摩擦法向接触、原型规模动态 FEM 对比、未来工业规模验证？

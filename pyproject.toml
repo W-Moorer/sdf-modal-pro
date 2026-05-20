@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modal-contact-rom"
+version = "0.1.0"
+description = "First-version prototype for patch contact modes on modal flexible bodies."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "meshio>=5.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["modal_contact_rom*"]
+

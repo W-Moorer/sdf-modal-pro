@@ -70,6 +70,19 @@ dynamic state.
 python examples/run_patch_residual_modes.py
 ```
 
+## Phase 5 SDF To Patch ILC
+
+The fifth roadmap phase connects SDF contact samples to active patch ILCs.
+Signed-distance contact samples are mapped through their closest surface
+triangle into the active patch level, normal contact forces are aggregated per
+patch, and the active load basis reconstructs `B_A alpha_A`. Diagnostics report
+contact-to-patch mapping, total force conservation, normal force conservation,
+and moment error.
+
+```powershell
+python examples/run_ilc_projection.py
+```
+
 ## Modules
 
 ```text

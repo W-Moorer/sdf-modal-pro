@@ -60,7 +60,6 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
     steps = 281
     plane_z = 0.525
     calculix_contact_stiffness = 500.0
-    python_contact_penalty = 300.0
     upward_force_per_free_top_node = 1.35
     load_ramp_time = 0.08
     rayleigh_alpha = 0.02
@@ -106,9 +105,15 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
     )
     run_ccx_wsl(contact_job, workdir, timeout=180)
     calculix_history = read_node_print_displacements(workdir / f"{contact_job}.dat")
-    calculix_contact = read_calculix_contact_stress_blocks(workdir / f"{contact_job}.dat")
+    calculix_contact = read_calculix_contact_blocks(workdir / f"{contact_job}.dat")
+    python_contact_penalty = calculix_contact_stiffness
 
-    rigid_plane = PrescribedRigidPlane(point=np.array([0.0, 0.0, plane_z]), normal=np.array([0.0, 0.0, 1.0]))
+    rigid_plane = PrescribedRigidPlane(
+        point=np.array([0.0, 0.0, plane_z]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        area_weighted=True,
+    )
+    nodal_contact_areas = rigid_plane.nodal_area_scales(fem.mesh, surface)
     external_force = lambda time: cload * min(max(time / load_ramp_time, 0.0), 1.0)
     full = FullFEMContactSimulator(
         fem=fem,
@@ -170,6 +175,10 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "free_top_nodes": [int(node_id) for node_id in free_top_nodes],
         "calculix_contact_stiffness": calculix_contact_stiffness,
         "python_contact_penalty": python_contact_penalty,
+        "python_contact_model": "area-weighted pressure-overclosure",
+        "python_contact_penalty_source": "CalculiX PRESSURE-OVERCLOSURE input stiffness applied to nodal tributary areas",
+        "top_contact_area_sum": float(np.sum(nodal_contact_areas[top_nodes])),
+        "free_top_contact_area_sum": float(np.sum(nodal_contact_areas[free_top_nodes])),
         "upward_force_per_free_top_node": upward_force_per_free_top_node,
         "load_ramp_time": load_ramp_time,
         "active_rom_base_modes": int(base_basis.shape[1]),
@@ -182,6 +191,10 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "calculix_contact_stress_blocks": int(calculix_contact["block_count"]),
         "calculix_contact_stress_rows": int(calculix_contact["row_count"]),
         "max_calculix_contact_pressure": float(calculix_contact["max_pressure"]),
+        "max_calculix_contact_overclosure": float(calculix_contact["max_overclosure"]),
+        "calculix_pressure_overclosure_sample_count": int(calculix_contact["sample_count"]),
+        "calculix_output_pressure_overclosure_lsq_slope": float(calculix_contact["equivalent_pressure_stiffness"]),
+        "calculix_output_max_pressure_overclosure_ratio": float(calculix_contact["max_pressure_overclosure_ratio"]),
         "python_full_vs_calculix": asdict(full_vs_calculix),
         "adaptive_rom_vs_python_full": asdict(rom_vs_full),
         "adaptive_rom_vs_calculix": asdict(rom_vs_calculix),
@@ -320,36 +333,82 @@ def max_calculix_observed_penetration(
     return float(np.max(history)) if history.size else 0.0
 
 
-def read_calculix_contact_stress_blocks(path: Path) -> dict[str, float | int]:
+def read_calculix_contact_blocks(path: Path) -> dict[str, float | int]:
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    header = re.compile(r"contact stress .* time\s+([+-]?\d+(?:\.\d*)?(?:[Ee][+-]?\d+)?)", re.IGNORECASE)
+    cdis_header = re.compile(
+        r"relative contact displacement .* time\s+([+-]?\d+(?:\.\d*)?(?:[Ee][+-]?\d+)?)",
+        re.IGNORECASE,
+    )
+    stress_header = re.compile(r"contact stress .* time\s+([+-]?\d+(?:\.\d*)?(?:[Ee][+-]?\d+)?)", re.IGNORECASE)
     block_count = 0
     row_count = 0
     max_pressure = 0.0
-    in_block = False
+    max_overclosure = 0.0
+    block_kind: str | None = None
+    current_time: float | None = None
+    cdis: dict[tuple[float, int], float] = {}
+    stress: dict[tuple[float, int], float] = {}
     for line in lines:
-        if header.search(line):
-            block_count += 1
-            in_block = True
+        cdis_match = cdis_header.search(line)
+        if cdis_match:
+            block_kind = "cdis"
+            current_time = float(cdis_match.group(1).replace("D", "E"))
             continue
-        if not in_block:
+        stress_match = stress_header.search(line)
+        if stress_match:
+            block_count += 1
+            block_kind = "stress"
+            current_time = float(stress_match.group(1).replace("D", "E"))
+            continue
+        if block_kind is None or current_time is None:
             continue
         if not line.strip():
             continue
-        if line.lstrip().lower().startswith(("displacements", "relative contact")):
-            in_block = False
+        if line.lstrip().lower().startswith(("displacements", "relative contact", "contact stress")):
+            block_kind = None
             continue
         parts = line.split()
         if len(parts) != 4:
             continue
         try:
-            int(parts[0])
-            pressure = float(parts[1].replace("D", "E"))
+            node_id = int(parts[0]) - 1
+            normal_value = float(parts[1].replace("D", "E"))
         except ValueError:
             continue
-        row_count += 1
-        max_pressure = max(max_pressure, abs(pressure))
-    return {"block_count": block_count, "row_count": row_count, "max_pressure": max_pressure}
+        key = (current_time, node_id)
+        if block_kind == "cdis":
+            cdis[key] = normal_value
+            max_overclosure = max(max_overclosure, max(-normal_value, 0.0))
+        elif block_kind == "stress":
+            stress[key] = normal_value
+            row_count += 1
+            max_pressure = max(max_pressure, abs(normal_value))
+
+    overclosures = []
+    pressures = []
+    for key, pressure in stress.items():
+        overclosure = max(-cdis.get(key, 0.0), 0.0)
+        pressure = abs(float(pressure))
+        if overclosure > 1.0e-14 and pressure > 0.0:
+            overclosures.append(overclosure)
+            pressures.append(pressure)
+    if overclosures:
+        overclosure_array = np.asarray(overclosures, dtype=float)
+        pressure_array = np.asarray(pressures, dtype=float)
+        equivalent = float((overclosure_array @ pressure_array) / (overclosure_array @ overclosure_array))
+        max_ratio = float(max_pressure / max_overclosure) if max_overclosure > 0.0 else float("nan")
+    else:
+        equivalent = float("nan")
+        max_ratio = float("nan")
+    return {
+        "block_count": block_count,
+        "row_count": row_count,
+        "max_pressure": max_pressure,
+        "max_overclosure": max_overclosure,
+        "sample_count": len(overclosures),
+        "equivalent_pressure_stiffness": equivalent,
+        "max_pressure_overclosure_ratio": max_ratio,
+    }
 
 
 def relative_l2(reference: np.ndarray, candidate: np.ndarray) -> float:

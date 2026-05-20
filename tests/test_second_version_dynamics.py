@@ -103,6 +103,29 @@ def test_full_fem_plane_contact_accepts_time_dependent_external_force() -> None:
     assert all(np.isfinite(step.energy_balance_error) for step in result.steps)
 
 
+def test_area_weighted_plane_contact_matches_pressure_times_area() -> None:
+    fem = cantilever_block(nx=2, ny=1, nz=1, length=2.0, width=1.0, height=1.0)
+    surface = extract_surface(fem.mesh)
+    plane = PrescribedRigidPlane(
+        point=np.array([0.0, 0.0, 0.49]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        area_weighted=True,
+    )
+
+    contact = plane.contact_force(
+        fem.mesh,
+        surface,
+        displacement=np.zeros(fem.mesh.n_dofs, dtype=float),
+        velocity=np.zeros(fem.mesh.n_dofs, dtype=float),
+        time=0.0,
+        penalty=100.0,
+    )
+
+    np.testing.assert_allclose(np.sum(plane.nodal_area_scales(fem.mesh, surface)), 2.0)
+    np.testing.assert_allclose(contact.normal_force, 2.0)
+    np.testing.assert_allclose(contact.max_penetration, 0.01)
+
+
 def _right_side_patch(patches: list[SurfacePatch]) -> SurfacePatch:
     right = [patch for patch in patches if patch.key[0] == 0 and patch.key[1] == 1]
     assert right

@@ -138,6 +138,8 @@ class PrescribedRigidPlane:
         point: np.ndarray,
         normal: np.ndarray,
         velocity: np.ndarray | Callable[[float], np.ndarray] | None = None,
+        area_weighted: bool = False,
+        area_normal_alignment: float = 0.5,
     ) -> None:
         self.point = np.asarray(point, dtype=float)
         normal = np.asarray(normal, dtype=float)
@@ -146,6 +148,10 @@ class PrescribedRigidPlane:
             raise ValueError("normal must be nonzero")
         self.normal = normal / normal_norm
         self._velocity = velocity
+        self.area_weighted = bool(area_weighted)
+        self.area_normal_alignment = float(area_normal_alignment)
+        if not -1.0 <= self.area_normal_alignment <= 1.0:
+            raise ValueError("area_normal_alignment must be between -1 and 1")
 
     def velocity(self, time: float) -> np.ndarray:
         if callable(self._velocity):
@@ -195,6 +201,7 @@ class PrescribedRigidPlane:
 
         plane_velocity = self.velocity(time)
         nodal_velocity = velocity.reshape(-1, 3)
+        nodal_area = self.nodal_area_scales(mesh, surface)
         normal_force = 0.0
         max_penetration = 0.0
         for node_id, point in zip(evaluation.contact_node_ids, evaluation.contact_points):
@@ -202,7 +209,8 @@ class PrescribedRigidPlane:
             penetration = max(signed, 0.0)
             force_normal = -self.normal
             relative_normal_speed = float(np.dot(nodal_velocity[int(node_id)] - plane_velocity, force_normal))
-            force_magnitude = penalty * penetration - damping * min(relative_normal_speed, 0.0)
+            area_scale = float(nodal_area[int(node_id)])
+            force_magnitude = area_scale * (penalty * penetration - damping * min(relative_normal_speed, 0.0))
             force_magnitude = max(force_magnitude, 0.0)
             force = force_magnitude * force_normal
             start = 3 * int(node_id)
@@ -219,3 +227,15 @@ class PrescribedRigidPlane:
             contact_node_ids=evaluation.contact_node_ids,
             contact_points=evaluation.contact_points,
         )
+
+    def nodal_area_scales(self, mesh: Mesh, surface: SurfaceMesh) -> np.ndarray:
+        if not self.area_weighted:
+            return np.ones(mesh.n_nodes, dtype=float)
+        areas = np.zeros(mesh.n_nodes, dtype=float)
+        alignment = surface.normals @ self.normal
+        triangle_ids = np.flatnonzero(alignment >= self.area_normal_alignment)
+        for tri_id in triangle_ids:
+            share = float(surface.areas[tri_id]) / 3.0
+            for node_id in surface.triangles[tri_id]:
+                areas[int(node_id)] += share
+        return areas

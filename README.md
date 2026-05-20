@@ -81,7 +81,9 @@ python examples/compare_three_way_dynamics.py
 
 The nonlinear contact three-way check adds a CalculiX `*CONTACT PAIR` run
 against a fixed rigid-like plane, then compares CalculiX full-order contact,
-Python full-order contact, and adaptive ROM contact:
+Python full-order contact, and adaptive ROM contact. The Python plane-contact
+model uses nodal tributary areas so its penalty is interpreted as the same
+pressure-overclosure stiffness used in the CalculiX input deck:
 
 ```powershell
 python examples/compare_three_way_contact_dynamics.py

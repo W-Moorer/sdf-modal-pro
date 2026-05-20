@@ -27,16 +27,42 @@ class AdaptivePatchActivationConfig:
     alpha_blend: float = 0.2
     max_active_patches: int | None = None
     projection_error_refine_threshold: float = 0.05
+    force_gradient_refine_threshold: float | None = None
+    fine_neighbor_depth: int = 0
+    use_overlap_weights: bool = False
 
     def __post_init__(self) -> None:
         if self.neighbor_depth < 0:
             raise ValueError("neighbor_depth must be non-negative")
+        if self.fine_neighbor_depth < 0:
+            raise ValueError("fine_neighbor_depth must be non-negative")
         if self.deactivate_delay < 0:
             raise ValueError("deactivate_delay must be non-negative")
         if not (0.0 < self.alpha_blend <= 1.0):
             raise ValueError("alpha_blend must be in (0, 1]")
         if self.max_active_patches is not None and self.max_active_patches < 1:
             raise ValueError("max_active_patches must be positive")
+        if self.projection_error_refine_threshold < 0.0:
+            raise ValueError("projection_error_refine_threshold must be non-negative")
+        if self.force_gradient_refine_threshold is not None and self.force_gradient_refine_threshold < 0.0:
+            raise ValueError("force_gradient_refine_threshold must be non-negative")
+
+
+_PATCH_KEY_STRIDE = 1_000_000
+
+
+@dataclass(frozen=True)
+class MultiScalePatchLevel:
+    level_index: int
+    name: str
+    patch_level: PatchLevel
+    load_bases: tuple[PatchLoadBasis, ...]
+
+    def __post_init__(self) -> None:
+        if self.level_index < 0:
+            raise ValueError("level_index must be non-negative")
+        object.__setattr__(self, "level_index", int(self.level_index))
+        object.__setattr__(self, "load_bases", tuple(self.load_bases))
 
 
 @dataclass(frozen=True)
@@ -252,6 +278,263 @@ class AdaptivePatchILCProjector:
         return next_counts
 
 
+class MultiScaleAdaptivePatchILCProjector:
+    """Phase-7 coarse/medium/fine active-patch smoother with fine refinement."""
+
+    def __init__(
+        self,
+        mesh: Mesh,
+        surface: SurfaceMesh,
+        coarse_patch_level: PatchLevel,
+        coarse_load_bases: Sequence[PatchLoadBasis],
+        medium_patch_level: PatchLevel,
+        medium_load_bases: Sequence[PatchLoadBasis],
+        fine_patch_level: PatchLevel,
+        fine_load_bases: Sequence[PatchLoadBasis],
+        config: AdaptivePatchActivationConfig | None = None,
+    ) -> None:
+        self.mesh = mesh
+        self.surface = surface
+        self.config = AdaptivePatchActivationConfig() if config is None else config
+        self.levels = (
+            MultiScalePatchLevel(0, coarse_patch_level.name, coarse_patch_level, tuple(coarse_load_bases)),
+            MultiScalePatchLevel(1, medium_patch_level.name, medium_patch_level, tuple(medium_load_bases)),
+            MultiScalePatchLevel(2, fine_patch_level.name, fine_patch_level, tuple(fine_load_bases)),
+        )
+        self.state = AdaptivePatchActivationState.empty()
+        self._basis_by_key: dict[int, PatchLoadBasis] = {}
+        self._basis_index_by_key: dict[int, int] = {}
+        flat_index = 0
+        for level in self.levels:
+            for basis in level.load_bases:
+                key = encode_multiscale_patch_id(level.level_index, basis.patch_id)
+                encoded = _basis_with_patch_key(level.name, key, basis)
+                self._basis_by_key[key] = encoded
+                self._basis_index_by_key[key] = flat_index
+                flat_index += 1
+        self.total_patch_count = sum(level.patch_level.patch_count for level in self.levels)
+
+    def step(self, points: np.ndarray, areas: np.ndarray, penalty: float, step_id: int = 0) -> AdaptivePatchStepResult:
+        samples_by_level = {
+            level.level_index: detect_sdf_contact_samples(
+                points,
+                self.surface,
+                level.patch_level,
+                penalty=penalty,
+                sample_areas=areas,
+            )
+            for level in self.levels
+        }
+        medium_level = self.levels[1]
+        fine_level = self.levels[2]
+        medium_samples = samples_by_level[medium_level.level_index]
+        medium_alpha = self._target_alpha_for_level(medium_level, medium_samples)
+        medium_error = _projection_error(
+            self.mesh,
+            self.surface,
+            medium_samples,
+            {basis.patch_id: basis for basis in medium_level.load_bases},
+            medium_alpha,
+        )
+        fine_needed = self._needs_fine_refinement(medium_samples, medium_error)
+        carrier_level = fine_level if fine_needed else medium_level
+        carrier_samples = samples_by_level[carrier_level.level_index]
+        raw_alpha = _encode_alpha_by_level(
+            carrier_level.level_index,
+            self._target_alpha_for_level(carrier_level, carrier_samples),
+        )
+        requested_patch_ids = self._requested_patch_ids(samples_by_level, fine_needed)
+        desired = self._desired_patch_ids(samples_by_level, fine_needed, raw_alpha)
+        active_patch_ids = self._apply_hysteresis(desired)
+        active_patch_ids = self._apply_active_bound(active_patch_ids, raw_alpha, requested_patch_ids)
+        alpha_by_patch = self._smooth_alpha(active_patch_ids, raw_alpha, carrier_samples.total_normal_force)
+        active_bases = tuple(self._basis_by_key[patch_id] for patch_id in active_patch_ids if patch_id in self._basis_by_key)
+        alpha = np.asarray([alpha_by_patch.get(basis.patch_id, 0.0) for basis in active_bases], dtype=float)
+        active_set = ActivePatchSet(
+            active_patch_ids=tuple(basis.patch_id for basis in active_bases),
+            active_load_basis_indices=tuple(self._basis_index_by_key[basis.patch_id] for basis in active_bases),
+            alpha=alpha,
+        )
+        projected = assemble_load_basis(active_bases) @ alpha if active_bases else np.zeros(self.mesh.n_dofs, dtype=float)
+        sample_lumped = assemble_sample_lumped_force_vector(self.mesh, self.surface, carrier_samples)
+        previous_force = sum(self.state.alpha_by_patch.values())
+        projected_force = float(np.sum(alpha))
+        force_jump = _relative_scalar_jump(previous_force, projected_force)
+        alpha_jump = _alpha_jump(self.state.alpha_by_patch, alpha_by_patch)
+        projection_error = _relative_norm(projected - sample_lumped, sample_lumped)
+        next_state = AdaptivePatchActivationState(
+            active_patch_ids=active_set.active_patch_ids,
+            alpha_by_patch={patch_id: alpha_by_patch.get(patch_id, 0.0) for patch_id in active_set.active_patch_ids},
+            inactive_steps=self._next_inactive_steps(desired, active_set.active_patch_ids),
+        )
+        self.state = next_state
+        return AdaptivePatchStepResult(
+            step_id=step_id,
+            requested_patch_ids=requested_patch_ids,
+            active_set=active_set,
+            samples=carrier_samples,
+            projected_force_vector=projected,
+            sample_lumped_force_vector=sample_lumped,
+            projected_normal_force=projected_force,
+            sample_normal_force=carrier_samples.total_normal_force,
+            force_jump=force_jump,
+            alpha_jump=alpha_jump,
+            projection_error=projection_error,
+            estimated_runtime_ratio=len(active_set.active_patch_ids) / max(1, self.total_patch_count),
+            state=next_state,
+        )
+
+    def _target_alpha_for_level(self, level: MultiScalePatchLevel, samples: ContactSampleSet) -> dict[int, float]:
+        basis_by_patch = {basis.patch_id: basis for basis in level.load_bases}
+        if self.config.use_overlap_weights:
+            return _target_alpha_by_patch_weighted(samples, basis_by_patch, level.patch_level)
+        return _target_alpha_by_patch(samples, basis_by_patch)
+
+    def _needs_fine_refinement(self, samples: ContactSampleSet, medium_error: float) -> bool:
+        if samples.sample_count == 0:
+            return False
+        if medium_error > self.config.projection_error_refine_threshold:
+            return True
+        threshold = self.config.force_gradient_refine_threshold
+        if threshold is None:
+            return False
+        return _force_gradient_indicator(samples) > threshold
+
+    def _requested_patch_ids(self, samples_by_level: dict[int, ContactSampleSet], fine_needed: bool) -> tuple[int, ...]:
+        requested: list[int] = []
+        for level in self.levels[:2]:
+            requested.extend(
+                encode_multiscale_patch_id(level.level_index, patch_id)
+                for patch_id in samples_by_level[level.level_index].active_patch_ids
+            )
+        if fine_needed:
+            fine_level = self.levels[2]
+            requested.extend(
+                encode_multiscale_patch_id(fine_level.level_index, patch_id)
+                for patch_id in samples_by_level[fine_level.level_index].active_patch_ids
+            )
+        return _unique_tuple(requested)
+
+    def _desired_patch_ids(
+        self,
+        samples_by_level: dict[int, ContactSampleSet],
+        fine_needed: bool,
+        raw_alpha: dict[int, float],
+    ) -> tuple[int, ...]:
+        desired: list[int] = []
+        coarse_level = self.levels[0]
+        desired.extend(
+            encode_multiscale_patch_id(coarse_level.level_index, patch_id)
+            for patch_id in samples_by_level[coarse_level.level_index].active_patch_ids
+        )
+        medium_level = self.levels[1]
+        medium_requested = expand_patch_ids_with_neighbors(
+            medium_level.patch_level,
+            samples_by_level[medium_level.level_index].active_patch_ids,
+            depth=self.config.neighbor_depth,
+        )
+        desired.extend(encode_multiscale_patch_id(medium_level.level_index, patch_id) for patch_id in medium_requested)
+        if fine_needed:
+            fine_level = self.levels[2]
+            fine_requested = expand_patch_ids_with_neighbors(
+                fine_level.patch_level,
+                samples_by_level[fine_level.level_index].active_patch_ids,
+                depth=self.config.fine_neighbor_depth,
+            )
+            desired.extend(encode_multiscale_patch_id(fine_level.level_index, patch_id) for patch_id in fine_requested)
+        desired.extend(raw_alpha)
+        return _unique_tuple(desired)
+
+    def _apply_hysteresis(self, desired: tuple[int, ...]) -> tuple[int, ...]:
+        active = list(desired)
+        desired_set = set(desired)
+        for patch_id in self.state.active_patch_ids:
+            if patch_id in desired_set:
+                continue
+            inactive_count = self.state.inactive_steps.get(patch_id, 0) + 1
+            if inactive_count <= self.config.deactivate_delay:
+                active.append(patch_id)
+        return _unique_tuple(active)
+
+    def _apply_active_bound(
+        self,
+        active_patch_ids: tuple[int, ...],
+        raw_alpha: dict[int, float],
+        requested_patch_ids: tuple[int, ...],
+    ) -> tuple[int, ...]:
+        max_active = self.config.max_active_patches
+        if max_active is None or len(active_patch_ids) <= max_active:
+            return active_patch_ids
+        requested = set(requested_patch_ids)
+        ranked = sorted(
+            active_patch_ids,
+            key=lambda patch_id: (
+                abs(raw_alpha.get(patch_id, self.state.alpha_by_patch.get(patch_id, 0.0))) <= 0.0,
+                patch_id not in requested,
+                -abs(raw_alpha.get(patch_id, self.state.alpha_by_patch.get(patch_id, 0.0))),
+                decode_multiscale_patch_id(patch_id),
+            ),
+        )
+        return tuple(sorted(ranked[:max_active]))
+
+    def _smooth_alpha(
+        self,
+        active_patch_ids: tuple[int, ...],
+        raw_alpha: dict[int, float],
+        target_total: float,
+    ) -> dict[int, float]:
+        if not active_patch_ids or target_total <= 0.0:
+            return {patch_id: 0.0 for patch_id in active_patch_ids}
+        blended: dict[int, float] = {}
+        blend = self.config.alpha_blend
+        for patch_id in active_patch_ids:
+            old_value = self.state.alpha_by_patch.get(patch_id, 0.0)
+            target = raw_alpha.get(patch_id, 0.0)
+            blended[patch_id] = max((1.0 - blend) * old_value + blend * target, 0.0)
+        current_total = sum(blended.values())
+        if current_total <= 0.0:
+            requested = [patch_id for patch_id in active_patch_ids if raw_alpha.get(patch_id, 0.0) > 0.0]
+            if not requested:
+                return blended
+            share = target_total / float(len(requested))
+            for patch_id in requested:
+                blended[patch_id] = share
+            current_total = target_total
+        scale = target_total / max(current_total, 1.0e-30)
+        return {patch_id: value * scale for patch_id, value in blended.items()}
+
+    def _next_inactive_steps(
+        self,
+        desired: tuple[int, ...],
+        active_patch_ids: tuple[int, ...],
+    ) -> dict[int, int]:
+        desired_set = set(desired)
+        next_counts: dict[int, int] = {}
+        for patch_id in active_patch_ids:
+            if patch_id in desired_set:
+                next_counts[patch_id] = 0
+            else:
+                next_counts[patch_id] = self.state.inactive_steps.get(patch_id, 0) + 1
+        return next_counts
+
+
+def encode_multiscale_patch_id(level_index: int, patch_id: int) -> int:
+    """Encode a patch id with its hierarchy level so active ids stay unique."""
+
+    if level_index < 0 or patch_id < 0:
+        raise ValueError("level_index and patch_id must be non-negative")
+    return int(level_index) * _PATCH_KEY_STRIDE + int(patch_id)
+
+
+def decode_multiscale_patch_id(encoded_patch_id: int) -> tuple[int, int]:
+    """Decode a multi-scale active patch id into ``(level_index, patch_id)``."""
+
+    encoded = int(encoded_patch_id)
+    if encoded < 0:
+        raise ValueError("encoded_patch_id must be non-negative")
+    return encoded // _PATCH_KEY_STRIDE, encoded % _PATCH_KEY_STRIDE
+
+
 def expand_patch_ids_with_neighbors(patch_level: PatchLevel, patch_ids: Sequence[int], depth: int = 1) -> tuple[int, ...]:
     """Expand selected patch ids by geodesic one-ring adjacency depth."""
 
@@ -307,6 +590,52 @@ def run_adaptive_patch_sequence(
     return AdaptivePatchSequenceResult(
         steps=tuple(steps),
         total_patch_count=patch_level.patch_count,
+        full_patch_runtime_ratio=1.0,
+        coarse_projection_errors=tuple(coarse_errors),
+    )
+
+
+def run_multiscale_adaptive_patch_sequence(
+    mesh: Mesh,
+    surface: SurfaceMesh,
+    coarse_patch_level: PatchLevel,
+    coarse_load_bases: Sequence[PatchLoadBasis],
+    medium_patch_level: PatchLevel,
+    medium_load_bases: Sequence[PatchLoadBasis],
+    fine_patch_level: PatchLevel,
+    fine_load_bases: Sequence[PatchLoadBasis],
+    frames: Sequence[tuple[np.ndarray, np.ndarray]],
+    penalty: float,
+    config: AdaptivePatchActivationConfig | None = None,
+) -> AdaptivePatchSequenceResult:
+    projector = MultiScaleAdaptivePatchILCProjector(
+        mesh,
+        surface,
+        coarse_patch_level,
+        coarse_load_bases,
+        medium_patch_level,
+        medium_load_bases,
+        fine_patch_level,
+        fine_load_bases,
+        config=config,
+    )
+    steps: list[AdaptivePatchStepResult] = []
+    coarse_errors: list[float] = []
+    coarse_basis_by_patch = {basis.patch_id: basis for basis in coarse_load_bases}
+    for step_id, (points, areas) in enumerate(frames):
+        steps.append(projector.step(points, areas, penalty=penalty, step_id=step_id))
+        coarse_samples = detect_sdf_contact_samples(
+            points,
+            surface,
+            coarse_patch_level,
+            penalty=penalty,
+            sample_areas=areas,
+        )
+        coarse_alpha = _target_alpha_by_patch(coarse_samples, coarse_basis_by_patch)
+        coarse_errors.append(_projection_error(mesh, surface, coarse_samples, coarse_basis_by_patch, coarse_alpha))
+    return AdaptivePatchSequenceResult(
+        steps=tuple(steps),
+        total_patch_count=projector.total_patch_count,
         full_patch_runtime_ratio=1.0,
         coarse_projection_errors=tuple(coarse_errors),
     )
@@ -369,6 +698,35 @@ def _target_alpha_by_patch(samples: ContactSampleSet, basis_by_patch: dict[int, 
     return target
 
 
+def _target_alpha_by_patch_weighted(
+    samples: ContactSampleSet,
+    basis_by_patch: dict[int, PatchLoadBasis],
+    patch_level: PatchLevel,
+) -> dict[int, float]:
+    target: dict[int, float] = {}
+    if samples.sample_count == 0:
+        return target
+    patch_ids_by_column = [patch.patch_id for patch in patch_level.patches]
+    directions: dict[int, np.ndarray] = {}
+    for patch_id, basis in basis_by_patch.items():
+        direction = basis.resultant if basis.resultant is not None else total_nodal_force(basis.B_j[:, 0])
+        norm = float(np.linalg.norm(direction))
+        if norm > 0.0:
+            directions[int(patch_id)] = direction / norm
+    for sample_id, triangle_id in enumerate(samples.triangle_indices):
+        if int(triangle_id) < 0 or int(triangle_id) >= patch_level.triangle_count:
+            continue
+        weights = patch_level.triangle_weights[int(triangle_id)]
+        for column in np.flatnonzero(weights > 0.0):
+            patch_id = int(patch_ids_by_column[int(column)])
+            direction = directions.get(patch_id)
+            if direction is None:
+                continue
+            contribution = float(weights[int(column)] * np.dot(samples.forces[sample_id], direction))
+            target[patch_id] = target.get(patch_id, 0.0) + max(contribution, 0.0)
+    return target
+
+
 def _projection_error(
     mesh: Mesh,
     surface: SurfaceMesh,
@@ -383,6 +741,32 @@ def _projection_error(
     projected = assemble_load_basis(active_bases) @ alpha if active_bases else np.zeros(mesh.n_dofs, dtype=float)
     sample_lumped = assemble_sample_lumped_force_vector(mesh, surface, samples)
     return _relative_norm(projected - sample_lumped, sample_lumped)
+
+
+def _basis_with_patch_key(level_name: str, patch_key: int, basis: PatchLoadBasis) -> PatchLoadBasis:
+    return PatchLoadBasis(
+        patch_id=patch_key,
+        basis_type=f"{level_name}:{basis.basis_type}",
+        B_j=basis.B_j,
+        labels=basis.labels,
+        node_indices=basis.node_indices,
+        node_weights=basis.node_weights,
+        patch_area=basis.patch_area,
+        resultant=basis.resultant,
+    )
+
+
+def _encode_alpha_by_level(level_index: int, alpha_by_patch: dict[int, float]) -> dict[int, float]:
+    return {encode_multiscale_patch_id(level_index, patch_id): value for patch_id, value in alpha_by_patch.items()}
+
+
+def _force_gradient_indicator(samples: ContactSampleSet) -> float:
+    if samples.sample_count <= 1:
+        return 0.0
+    mean_force = float(np.mean(samples.normal_forces))
+    if mean_force <= 1.0e-30:
+        return 0.0
+    return float(np.std(samples.normal_forces) / mean_force)
 
 
 def _relative_norm(value: np.ndarray, reference: np.ndarray) -> float:

@@ -13,7 +13,8 @@ from modal_contact_rom.fem_io import cantilever_block
 from modal_contact_rom.modal_ilc import (
     AdaptivePatchActivationConfig,
     build_normal_patch_load_bases,
-    run_adaptive_patch_sequence,
+    decode_multiscale_patch_id,
+    run_multiscale_adaptive_patch_sequence,
     write_adaptive_patch_tables,
 )
 from modal_contact_rom.surface_patch import build_patch_hierarchy, extract_surface
@@ -22,34 +23,46 @@ from modal_contact_rom.surface_patch import build_patch_hierarchy, extract_surfa
 def main() -> None:
     fem = cantilever_block(nx=2, ny=8, nz=2, stiffness_scale=100.0)
     surface = extract_surface(fem.mesh)
-    hierarchy = build_patch_hierarchy(surface, coarse_bins=(1, 1), medium_bins=(4, 2))
+    hierarchy = build_patch_hierarchy(surface, coarse_bins=(1, 1), medium_bins=(4, 2), fine_bins=(8, 4))
     coarse = hierarchy.level("coarse")
     medium = hierarchy.level("medium")
+    fine = hierarchy.level("fine_overlap")
     coarse_bases = build_normal_patch_load_bases(fem.mesh, surface, coarse.patches)
     medium_bases = build_normal_patch_load_bases(fem.mesh, surface, medium.patches)
+    fine_bases = build_normal_patch_load_bases(fem.mesh, surface, fine.patches)
     config = AdaptivePatchActivationConfig(
         neighbor_depth=1,
+        fine_neighbor_depth=1,
         deactivate_delay=4,
         alpha_blend=0.3,
-        max_active_patches=8,
+        max_active_patches=32,
+        projection_error_refine_threshold=0.0,
+        use_overlap_weights=True,
     )
-    result = run_adaptive_patch_sequence(
+    result = run_multiscale_adaptive_patch_sequence(
         fem.mesh,
         surface,
+        coarse,
+        coarse_bases,
         medium,
         medium_bases,
+        fine,
+        fine_bases,
         _sliding_frames(surface, steps=41),
         penalty=100.0,
         config=config,
-        coarse_patch_level=coarse,
-        coarse_load_bases=coarse_bases,
     )
     output_dir = Path("outputs/adaptive_patch")
     write_adaptive_patch_tables(result, output_dir)
+    fine_active_steps = sum(
+        any(decode_multiscale_patch_id(patch_id)[0] == 2 for patch_id in step.active_set.active_patch_ids)
+        for step in result.steps
+    )
 
     print(f"max force jump: {result.max_force_jump:.6e}")
     print(f"max alpha jump: {result.max_alpha_jump:.6e}")
     print(f"max active patches: {result.max_active_patch_count} / {result.total_patch_count}")
+    print(f"fine-active steps: {fine_active_steps} / {len(result.steps)}")
     print(f"mean runtime ratio: {result.mean_runtime_ratio:.6e}")
     print(f"mean adaptive projection error: {result.mean_projection_error:.6e}")
     print(f"mean coarse-only projection error: {result.mean_coarse_projection_error:.6e}")

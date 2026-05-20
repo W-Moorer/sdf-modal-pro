@@ -99,11 +99,14 @@ python examples/run_online_residual_coupling.py
 ## Phase 7 Adaptive Patch Activation
 
 The seventh roadmap phase adds smooth active patch management for moving
-contact. Contact sample patches are expanded with one-ring neighbors, old
-patches stay active for a short deactivation delay, and patch ILC amplitudes
-are warm-started and renormalized to preserve total normal force. Diagnostics
-track active patch history, force jumps, alpha jumps, and the active-patch
-runtime proxy against full patch activation.
+contact. The implemented path uses coarse patches as a global safeguard,
+activates medium patches around the current contact samples, and refines to
+fine overlap patches when the medium projection error or contact-force gradient
+crosses the configured threshold. Patch overlap, partition-of-unity weights,
+active-set hysteresis, deactivation delay, and alpha warm starts are applied
+before the active ILC force is renormalized to preserve total normal force.
+Diagnostics track active patch history, force jumps, alpha jumps, and the
+active-patch runtime proxy against full patch activation.
 
 ```powershell
 python examples/run_adaptive_patch_activation.py

@@ -76,15 +76,22 @@ def build_patch_hierarchy(
     surface: SurfaceMesh,
     coarse_bins: tuple[int, int] = (1, 1),
     medium_bins: tuple[int, int] = (2, 2),
+    fine_bins: tuple[int, int] | None = None,
     include_overlap_medium: bool = True,
+    include_overlap_fine: bool = True,
 ) -> PatchHierarchy:
-    """Build the Phase-2 coarse/medium hierarchy over the full exterior surface."""
+    """Build the Phase-2 coarse/medium/fine hierarchy over the full exterior surface."""
 
     coarse = build_patch_level(surface, "coarse", partition_surface_patches(surface, coarse_bins), overlap=False)
     medium_patches = partition_surface_patches(surface, medium_bins)
     levels = [coarse, build_patch_level(surface, "medium", medium_patches, overlap=False)]
     if include_overlap_medium:
         levels.append(build_patch_level(surface, "medium_overlap", medium_patches, overlap=True))
+    if fine_bins is not None:
+        fine_patches = partition_surface_patches(surface, fine_bins)
+        levels.append(build_patch_level(surface, "fine", fine_patches, overlap=False))
+        if include_overlap_fine:
+            levels.append(build_patch_level(surface, "fine_overlap", fine_patches, overlap=True))
     return PatchHierarchy(surface=surface, levels=tuple(levels))
 
 

@@ -166,11 +166,20 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
 
     full_order_figure = workdir / "full_order_external_alignment.png"
     displacement_figure = workdir / "nonlinear_contact_three_way_displacement.png"
+    displacement_error_figure = workdir / "nonlinear_contact_three_way_displacement_error.png"
     contact_figure = workdir / "nonlinear_contact_three_way_contact_activity.png"
     representative_node = int(free_top_nodes[-1])
     plot_full_order_alignment(full_order_figure, representative_node, dt, full, calculix_history)
     plot_three_way_top_displacement(displacement_figure, representative_node, dt, full, rom, calculix_history)
+    plot_three_way_top_displacement_error(displacement_error_figure, representative_node, dt, full, rom, calculix_history)
     plot_contact_activity(contact_figure, top_nodes, fem.mesh.nodes, plane_z, dt, full, rom, calculix_history)
+    representative_node_error = representative_node_displacement_error_summary(
+        representative_node,
+        dt,
+        full,
+        rom,
+        calculix_history,
+    )
 
     report = {
         "external_solver": "CalculiX ccx via WSL, *DYNAMIC DIRECT with *CONTACT PAIR",
@@ -213,8 +222,10 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "python_full_vs_calculix": asdict(full_vs_calculix),
         "projected_rom_vs_python_full": asdict(rom_vs_full),
         "projected_rom_vs_calculix": asdict(rom_vs_calculix),
+        "representative_node_displacement_error": representative_node_error,
         "full_order_alignment_figure": str(full_order_figure),
         "displacement_figure": str(displacement_figure),
+        "displacement_error_figure": str(displacement_error_figure),
         "contact_activity_figure": str(contact_figure),
     }
     (workdir / "three_way_contact_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -282,6 +293,69 @@ def plot_three_way_top_displacement(
     ax.legend(fontsize=8)
     fig.savefig(path, dpi=180)
     plt.close(fig)
+
+
+def plot_three_way_top_displacement_error(
+    path: Path,
+    node_id: int,
+    dt: float,
+    full,
+    rom,
+    calculix_history: CalculixNodeHistory,
+) -> None:
+    time = dt * (np.arange(full.displacement_history.shape[0]) + 1)
+    py = full.displacement_history[:, 3 * node_id + 2]
+    reduced = rom.displacement_history[:, 3 * node_id + 2]
+    ccx = calculix_history.displacements[node_id][:, 2]
+    ccx_time = calculix_history.times[: ccx.shape[0]]
+    py_at_ccx = np.interp(ccx_time, time, py)
+
+    fig, axes = plt.subplots(3, 1, figsize=(9.5, 8.0), sharex=False, constrained_layout=True)
+    axes[0].plot(ccx_time, ccx, label="CalculiX nonlinear contact full FEM", linewidth=2.1)
+    axes[0].plot(time, py, "--", label="Python full FEM contact", linewidth=1.8)
+    axes[0].plot(time, reduced, ":", label="Projected ROM contact", linewidth=2.2)
+    axes[0].set_ylabel("Uz")
+    axes[0].grid(True, alpha=0.35)
+    axes[0].legend(fontsize=8)
+
+    axes[1].plot(time, reduced - py, color="tab:green", linewidth=1.8)
+    axes[1].axhline(0.0, color="0.35", linewidth=0.8)
+    axes[1].set_ylabel("ROM - Python full")
+    axes[1].ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
+    axes[1].grid(True, alpha=0.35)
+
+    axes[2].plot(ccx_time, ccx - py_at_ccx, color="tab:blue", linewidth=1.8)
+    axes[2].axhline(0.0, color="0.35", linewidth=0.8)
+    axes[2].set_xlabel("time")
+    axes[2].set_ylabel("CalculiX - Python full")
+    axes[2].ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
+    axes[2].grid(True, alpha=0.35)
+    fig.suptitle(f"Nonlinear contact displacement residuals, node {node_id + 1}")
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
+def representative_node_displacement_error_summary(
+    node_id: int,
+    dt: float,
+    full,
+    rom,
+    calculix_history: CalculixNodeHistory,
+) -> dict[str, float | int]:
+    time = dt * (np.arange(full.displacement_history.shape[0]) + 1)
+    py = full.displacement_history[:, 3 * node_id + 2]
+    reduced = rom.displacement_history[:, 3 * node_id + 2]
+    ccx = calculix_history.displacements[node_id][:, 2]
+    ccx_time = calculix_history.times[: ccx.shape[0]]
+    py_at_ccx = np.interp(ccx_time, time, py)
+    return {
+        "node_id_zero_based": int(node_id),
+        "node_id_one_based": int(node_id + 1),
+        "rom_minus_python_full_max_abs_uz": float(np.max(np.abs(reduced - py))),
+        "rom_minus_python_full_relative_l2_uz": relative_l2(py, reduced),
+        "calculix_minus_python_full_max_abs_uz": float(np.max(np.abs(ccx - py_at_ccx))),
+        "calculix_minus_python_full_relative_l2_uz": relative_l2(ccx, py_at_ccx),
+    }
 
 
 def compare_to_calculix_observed_displacements_at_times(

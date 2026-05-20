@@ -79,11 +79,11 @@ Python full-order FEM, adaptive ROM, and WSL CalculiX direct full-order FEM:
 python examples/compare_three_way_dynamics.py
 ```
 
-The nonlinear contact three-way check adds a CalculiX `*CONTACT PAIR` run
-against a fixed rigid-like plane, then compares CalculiX full-order contact,
-Python full-order contact, and adaptive ROM contact. The Python plane-contact
-model uses nodal tributary areas so its penalty is interpreted as the same
-pressure-overclosure stiffness used in the CalculiX input deck:
+The nonlinear contact three-way check first aligns Python full-order FEM
+against a CalculiX `*CONTACT PAIR` full-order run, then compares CalculiX
+full-order contact, Python full-order contact, and adaptive ROM contact. The
+Python plane-contact model uses hex-face tributary areas and a small full-order
+alignment sweep before the ROM result is evaluated:
 
 ```powershell
 python examples/compare_three_way_contact_dynamics.py

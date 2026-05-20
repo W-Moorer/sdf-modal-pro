@@ -121,7 +121,9 @@ def test_area_weighted_plane_contact_matches_pressure_times_area() -> None:
         penalty=100.0,
     )
 
-    np.testing.assert_allclose(np.sum(plane.nodal_area_scales(fem.mesh, surface)), 2.0)
+    area_scales = plane.nodal_area_scales(fem.mesh, surface)
+    np.testing.assert_allclose(np.sum(area_scales), 2.0)
+    np.testing.assert_allclose(area_scales[[1, 3, 5, 7, 9, 11]], [0.25, 0.25, 0.5, 0.5, 0.25, 0.25])
     np.testing.assert_allclose(contact.normal_force, 2.0)
     np.testing.assert_allclose(contact.max_penetration, 0.01)
 

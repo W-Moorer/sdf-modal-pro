@@ -337,7 +337,14 @@ def run_ccx_wsl(
     if distribution:
         command.extend(["-d", distribution])
     command.extend(["bash", "-lc", shell_command])
-    completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
     result = CalculixRunResult(
         job_name=stem,
         workdir=workdir,

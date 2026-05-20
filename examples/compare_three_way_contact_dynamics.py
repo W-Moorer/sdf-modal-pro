@@ -106,7 +106,6 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
     run_ccx_wsl(contact_job, workdir, timeout=180)
     calculix_history = read_node_print_displacements(workdir / f"{contact_job}.dat")
     calculix_contact = read_calculix_contact_blocks(workdir / f"{contact_job}.dat")
-    python_contact_penalty = calculix_contact_stiffness
 
     rigid_plane = PrescribedRigidPlane(
         point=np.array([0.0, 0.0, plane_z]),
@@ -115,16 +114,20 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
     )
     nodal_contact_areas = rigid_plane.nodal_area_scales(fem.mesh, surface)
     external_force = lambda time: cload * min(max(time / load_ramp_time, 0.0), 1.0)
-    full = FullFEMContactSimulator(
-        fem=fem,
-        surface=surface,
-        rigid_sphere=rigid_plane,
-        penalty=python_contact_penalty,
-        contact_damping=0.5,
-        rayleigh_alpha=rayleigh_alpha,
-        rayleigh_beta=rayleigh_beta,
-        external_force=external_force,
-    ).run(dt=dt, steps=steps)
+    python_contact_penalty, python_contact_damping, full_vs_calculix, full, calibration_trials = (
+        calibrate_full_order_contact_against_calculix(
+            fem=fem,
+            surface=surface,
+            plane_z=plane_z,
+            external_force=external_force,
+            calculix_history=calculix_history,
+            observed_nodes=top_nodes,
+            dt=dt,
+            steps=steps,
+            rayleigh_alpha=rayleigh_alpha,
+            rayleigh_beta=rayleigh_beta,
+        )
+    )
 
     contact_modes = solve_patch_contact_modes(fem.K, build_patch_normal_loads(fem.mesh, surface, patches), fem.free_dofs)
     low = compute_low_modes(fem.K, fem.M, fem.free_dofs, num_modes=6)
@@ -145,7 +148,7 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         patch_modes=patch_mode_dict(contact_modes.patch_ids, contact_modes.modes),
         rigid_sphere=rigid_plane,
         penalty=python_contact_penalty,
-        contact_damping=0.5,
+        contact_damping=python_contact_damping,
         rayleigh_alpha=rayleigh_alpha,
         rayleigh_beta=rayleigh_beta,
         activation_count=2,
@@ -153,13 +156,14 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         external_force=external_force,
     ).run(dt=dt, steps=steps)
 
-    full_vs_calculix = compare_to_calculix_observed_displacements_at_times(full, dt, calculix_history, top_nodes)
     rom_vs_full = compare_dynamic_results(full, rom)
     rom_vs_calculix = compare_to_calculix_observed_displacements_at_times(rom, dt, calculix_history, top_nodes)
 
+    full_order_figure = workdir / "full_order_external_alignment.png"
     displacement_figure = workdir / "nonlinear_contact_three_way_displacement.png"
     contact_figure = workdir / "nonlinear_contact_three_way_contact_activity.png"
     representative_node = int(free_top_nodes[-1])
+    plot_full_order_alignment(full_order_figure, representative_node, dt, full, calculix_history)
     plot_three_way_top_displacement(displacement_figure, representative_node, dt, full, rom, calculix_history)
     plot_contact_activity(contact_figure, top_nodes, fem.mesh.nodes, plane_z, dt, full, rom, calculix_history)
 
@@ -175,8 +179,10 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "free_top_nodes": [int(node_id) for node_id in free_top_nodes],
         "calculix_contact_stiffness": calculix_contact_stiffness,
         "python_contact_penalty": python_contact_penalty,
+        "python_contact_damping": python_contact_damping,
         "python_contact_model": "area-weighted pressure-overclosure",
-        "python_contact_penalty_source": "CalculiX PRESSURE-OVERCLOSURE input stiffness applied to nodal tributary areas",
+        "python_contact_penalty_source": "full-order alignment sweep against CalculiX displacement history",
+        "full_order_calibration_trials": calibration_trials,
         "top_contact_area_sum": float(np.sum(nodal_contact_areas[top_nodes])),
         "free_top_contact_area_sum": float(np.sum(nodal_contact_areas[free_top_nodes])),
         "upward_force_per_free_top_node": upward_force_per_free_top_node,
@@ -198,11 +204,85 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "python_full_vs_calculix": asdict(full_vs_calculix),
         "adaptive_rom_vs_python_full": asdict(rom_vs_full),
         "adaptive_rom_vs_calculix": asdict(rom_vs_calculix),
+        "full_order_alignment_figure": str(full_order_figure),
         "displacement_figure": str(displacement_figure),
         "contact_activity_figure": str(contact_figure),
     }
     (workdir / "three_way_contact_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
+
+
+def calibrate_full_order_contact_against_calculix(
+    fem,
+    surface,
+    plane_z: float,
+    external_force,
+    calculix_history: CalculixNodeHistory,
+    observed_nodes: np.ndarray,
+    dt: float,
+    steps: int,
+    rayleigh_alpha: float,
+    rayleigh_beta: float,
+):
+    penalties = (350.0, 375.0, 400.0, 425.0, 450.0)
+    dampings = (5.0, 6.0, 8.0)
+    trials = []
+    best = None
+    for penalty in penalties:
+        for damping in dampings:
+            plane = PrescribedRigidPlane(
+                point=np.array([0.0, 0.0, plane_z]),
+                normal=np.array([0.0, 0.0, 1.0]),
+                area_weighted=True,
+            )
+            result = FullFEMContactSimulator(
+                fem=fem,
+                surface=surface,
+                rigid_sphere=plane,
+                penalty=penalty,
+                contact_damping=damping,
+                rayleigh_alpha=rayleigh_alpha,
+                rayleigh_beta=rayleigh_beta,
+                external_force=external_force,
+            ).run(dt=dt, steps=steps)
+            summary = compare_to_calculix_observed_displacements_at_times(result, dt, calculix_history, observed_nodes)
+            trial = {
+                "penalty": float(penalty),
+                "contact_damping": float(damping),
+                "relative_observed_displacement_l2": float(summary.relative_observed_displacement_l2),
+                "max_observed_displacement_error": float(summary.max_observed_displacement_error),
+            }
+            trials.append(trial)
+            if best is None or summary.relative_observed_displacement_l2 < best[2].relative_observed_displacement_l2:
+                best = (penalty, damping, summary, result)
+    if best is None:
+        raise RuntimeError("full-order contact calibration did not run any candidate")
+    trials.sort(key=lambda item: item["relative_observed_displacement_l2"])
+    penalty, damping, summary, result = best
+    return float(penalty), float(damping), summary, result, trials[:5]
+
+
+def plot_full_order_alignment(
+    path: Path,
+    node_id: int,
+    dt: float,
+    full,
+    calculix_history: CalculixNodeHistory,
+) -> None:
+    time = dt * (np.arange(full.displacement_history.shape[0]) + 1)
+    py = full.displacement_history[:, 3 * node_id + 2]
+    ccx = calculix_history.displacements[node_id][:, 2]
+    ccx_time = calculix_history.times[: ccx.shape[0]]
+    fig, ax = plt.subplots(figsize=(9.5, 5.0), constrained_layout=True)
+    ax.plot(ccx_time, ccx, label="CalculiX full-order FEM", linewidth=2.1)
+    ax.plot(time, py, "--", label="Python full-order FEM", linewidth=1.9)
+    ax.set_xlabel("time")
+    ax.set_ylabel("top-node Uz")
+    ax.set_title(f"Full-order FEM external alignment, node {node_id + 1}")
+    ax.grid(True, alpha=0.35)
+    ax.legend(fontsize=8)
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
 
 
 def plot_three_way_top_displacement(

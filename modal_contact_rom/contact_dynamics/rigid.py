@@ -231,11 +231,53 @@ class PrescribedRigidPlane:
     def nodal_area_scales(self, mesh: Mesh, surface: SurfaceMesh) -> np.ndarray:
         if not self.area_weighted:
             return np.ones(mesh.n_nodes, dtype=float)
+        if mesh.element_type == "hex8":
+            return self._hex_face_area_scales(mesh)
         areas = np.zeros(mesh.n_nodes, dtype=float)
         alignment = surface.normals @ self.normal
         triangle_ids = np.flatnonzero(alignment >= self.area_normal_alignment)
         for tri_id in triangle_ids:
             share = float(surface.areas[tri_id]) / 3.0
             for node_id in surface.triangles[tri_id]:
+                areas[int(node_id)] += share
+        return areas
+
+    def _hex_face_area_scales(self, mesh: Mesh) -> np.ndarray:
+        faces = (
+            (0, 1, 2, 3),
+            (4, 7, 6, 5),
+            (0, 4, 5, 1),
+            (1, 5, 6, 2),
+            (2, 6, 7, 3),
+            (3, 7, 4, 0),
+        )
+        seen: dict[tuple[int, ...], list[tuple[int, ...] | int]] = {}
+        for element in mesh.elements:
+            for face in faces:
+                face_nodes = tuple(int(element[i]) for i in face)
+                key = tuple(sorted(face_nodes))
+                if key in seen:
+                    seen[key][1] = int(seen[key][1]) + 1
+                else:
+                    seen[key] = [face_nodes, 1]
+
+        center = np.mean(mesh.nodes, axis=0)
+        areas = np.zeros(mesh.n_nodes, dtype=float)
+        for face_nodes, count in seen.values():
+            if int(count) != 1:
+                continue
+            face = tuple(face_nodes)  # type: ignore[arg-type]
+            coords = mesh.nodes[list(face)]
+            normal = np.cross(coords[1] - coords[0], coords[2] - coords[0])
+            centroid = np.mean(coords, axis=0)
+            if float(np.dot(normal, centroid - center)) < 0.0:
+                normal = -normal
+            normal_norm = float(np.linalg.norm(normal))
+            if normal_norm <= 0.0 or float(np.dot(normal / normal_norm, self.normal)) < self.area_normal_alignment:
+                continue
+            area = 0.5 * float(np.linalg.norm(np.cross(coords[1] - coords[0], coords[2] - coords[0])))
+            area += 0.5 * float(np.linalg.norm(np.cross(coords[2] - coords[0], coords[3] - coords[0])))
+            share = area / 4.0
+            for node_id in face:
                 areas[int(node_id)] += share
         return areas

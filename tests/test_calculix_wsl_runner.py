@@ -31,12 +31,15 @@ from modal_contact_rom.validation import (
 def _has_wsl_ccx() -> bool:
     if shutil.which("wsl") is None:
         return False
-    completed = subprocess.run(
-        ["wsl", "bash", "-lc", "command -v ccx >/dev/null"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    try:
+        completed = subprocess.run(
+            ["wsl", "bash", "-lc", "command -v ccx >/dev/null"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return completed.returncode == 0
 
 

@@ -83,6 +83,19 @@ and moment error.
 python examples/run_ilc_projection.py
 ```
 
+## Phase 6 Online Residual Coupling
+
+The sixth roadmap phase runs the contact/ILC update inside an online
+fixed-point step. The solver forms `u = Psi eta + Phi_B alpha`, updates the
+deformed surface used for gap queries, recomputes contact samples, projects
+them back to active patch ILCs, and repeats with a frozen-alpha tangent style
+iteration. The main state dimension remains `y = [r, theta, eta_k, lambda]`;
+`alpha` stays in the contact/residual layer.
+
+```powershell
+python examples/run_online_residual_coupling.py
+```
+
 ## Modules
 
 ```text

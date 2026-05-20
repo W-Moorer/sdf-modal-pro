@@ -1,6 +1,12 @@
 """Patch-ILC residual correction layer."""
 
 from modal_contact_rom.modal_ilc.ilc_projection import ActivePatchSet, project_contact_force_to_ilc
+from modal_contact_rom.modal_ilc.online_coupling import (
+    OnlineResidualIteration,
+    OnlineResidualStepResult,
+    solve_online_residual_contact_step,
+    surface_with_displacement,
+)
 from modal_contact_rom.modal_ilc.patch_load_basis import (
     PatchLoadBasis,
     assemble_load_basis,
@@ -38,6 +44,8 @@ from modal_contact_rom.modal_ilc.sdf_projection import (
 __all__ = [
     "ActivePatchSet",
     "ContactSampleSet",
+    "OnlineResidualIteration",
+    "OnlineResidualStepResult",
     "PatchILCProjection",
     "PatchLoadBasis",
     "PatchResidualBasis",
@@ -60,7 +68,9 @@ __all__ = [
     "recover_residual_deformation",
     "recover_total_deformation",
     "solve_static_load_responses",
+    "solve_online_residual_contact_step",
     "static_completeness_errors",
+    "surface_with_displacement",
     "total_nodal_force",
     "total_nodal_moment",
     "write_ilc_projection_tables",

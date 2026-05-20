@@ -285,10 +285,11 @@ def _normal_resultant_for_patch(samples: ContactSampleSet, basis: PatchLoadBasis
 
 def _sample_area_vector(sample_areas: np.ndarray | None, points: np.ndarray, surface: SurfaceMesh) -> np.ndarray:
     point_array = np.asarray(points, dtype=float)
+    point_count = 1 if point_array.ndim == 1 else int(point_array.shape[0])
     if sample_areas is None:
-        return np.ones(point_array.shape[0], dtype=float)
+        return np.ones(point_count, dtype=float)
     areas = np.asarray(sample_areas, dtype=float)
-    if areas.shape != (point_array.shape[0],):
+    if areas.shape != (point_count,):
         raise ValueError("sample_areas must have one entry per query point")
     if np.any(areas < 0.0):
         raise ValueError("sample_areas must be non-negative")

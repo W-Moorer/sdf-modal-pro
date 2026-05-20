@@ -9,7 +9,7 @@ import numpy as np
 from modal_contact_rom.fem_io.mesh import Mesh
 from modal_contact_rom.modal_ilc.ilc_projection import ActivePatchSet
 from modal_contact_rom.modal_ilc.patch_load_basis import PatchLoadBasis, assemble_load_basis
-from modal_contact_rom.sdf_query.mesh_distance import query_signed_distances
+from modal_contact_rom.sdf_query.mesh_distance import SignedDistanceResult, query_signed_distances
 from modal_contact_rom.surface_patch.extract import SurfaceMesh
 from modal_contact_rom.surface_patch.patch_hierarchy import PatchLevel
 
@@ -118,16 +118,48 @@ def detect_sdf_contact_samples(
 ) -> ContactSampleSet:
     """Query SDF contact samples and map active samples to patch ids."""
 
+    query = query_signed_distances(points, surface)
+    return contact_samples_from_sdf_query(
+        points,
+        surface,
+        patch_level,
+        penalty,
+        query,
+        sample_areas=sample_areas,
+        contact_offset=contact_offset,
+    )
+
+
+def contact_samples_from_sdf_query(
+    points: np.ndarray,
+    surface: SurfaceMesh,
+    patch_level: PatchLevel,
+    penalty: float,
+    query: SignedDistanceResult,
+    sample_areas: np.ndarray | None = None,
+    contact_offset: float = 0.0,
+) -> ContactSampleSet:
+    """Map a cached SDF query to contact samples for one patch level."""
+
     if penalty < 0.0:
         raise ValueError("penalty must be non-negative")
-    query = query_signed_distances(points, surface)
+    point_array = np.asarray(points, dtype=float)
+    if point_array.ndim == 1:
+        point_array = point_array[None, :]
+    if point_array.ndim != 2 or point_array.shape[1] != 3:
+        raise ValueError("points must have shape (n, 3)")
+    if query.distances.shape != (point_array.shape[0],):
+        raise ValueError("cached SDF query must contain one distance per query point")
+    if query.closest_points.shape != point_array.shape or query.triangle_indices.shape != (point_array.shape[0],):
+        raise ValueError("cached SDF query shape does not match query points")
+
     distances = query.distances
     penetration = np.maximum(contact_offset - distances, 0.0)
     active = penetration > 0.0
     if not np.any(active):
         return ContactSampleSet.empty()
 
-    areas = _sample_area_vector(sample_areas, points, surface)
+    areas = _sample_area_vector(sample_areas, point_array, surface)
     active_triangles = query.triangle_indices[active]
     active_areas = areas[active]
     normals = surface.normals[active_triangles]

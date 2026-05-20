@@ -26,11 +26,21 @@ def main() -> None:
         f"{result.summary['sdf_projection_cases_passed']} / {result.summary['sdf_projection_cases']}"
     )
     print(
+        "complex surface cases: "
+        f"{result.summary['complex_surface_cases_passed']} / {result.summary['complex_surface_cases']}"
+    )
+    print(
+        "performance optimization cases: "
+        f"{result.summary['performance_optimization_cases_passed']} / {result.summary['performance_optimization_cases']}"
+    )
+    print(
         "three-way external FEM cases: "
         f"{result.summary['three_way_external_cases_passed']} / {result.summary['three_way_external_cases']}"
     )
     print(f"wrote {output_dir / 'tables' / 'ablation_summary.csv'}")
     print(f"wrote {output_dir / 'tables' / 'sdf_patch_projection.csv'}")
+    print(f"wrote {output_dir / 'tables' / 'complex_surface_moving_contact.csv'}")
+    print(f"wrote {output_dir / 'tables' / 'performance_optimization.csv'}")
     print(f"wrote {output_dir / 'tables' / 'three_way_external_fem.csv'}")
     print(f"wrote {output_dir / 'tables' / 'claim_gate.csv'}")
     print(f"wrote {output_dir / 'figures' / 'method_pipeline.png'}")
@@ -39,6 +49,8 @@ def main() -> None:
     print(f"wrote {output_dir / 'figures' / 'active_patch_history.png'}")
     print(f"wrote {output_dir / 'figures' / 'runtime_scaling.png'}")
     print(f"wrote {output_dir / 'figures' / 'sdf_patch_projection_map.png'}")
+    print(f"wrote {output_dir / 'figures' / 'complex_surface_moving_contact.png'}")
+    print(f"wrote {output_dir / 'figures' / 'performance_optimization.png'}")
     print(f"wrote {output_dir / 'logs' / 'patch_ilc_claims.md'}")
 
 

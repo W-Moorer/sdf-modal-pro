@@ -5,18 +5,23 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import shutil
+import time
 from typing import Any
 
 import numpy as np
 
 from modal_contact_rom.fem_io import cantilever_block
+from modal_contact_rom.fem_io.mesh import Mesh
 from modal_contact_rom.modal_ilc import (
     AdaptivePatchActivationConfig,
     build_normal_patch_load_bases,
+    contact_samples_from_sdf_query,
     detect_sdf_contact_samples,
     project_contact_samples_to_patch_ilc,
     run_adaptive_patch_sequence,
+    run_multiscale_adaptive_patch_sequence,
 )
+from modal_contact_rom.sdf_query.mesh_distance import query_signed_distances
 from modal_contact_rom.surface_patch import build_patch_hierarchy, extract_surface
 from modal_contact_rom.validation.phase8 import Phase8ValidationMatrix, run_phase8_validation_matrix
 
@@ -33,6 +38,8 @@ class Phase9ClaimGate:
     runtime_rows: tuple[Phase9Row, ...]
     ablation_rows: tuple[Phase9Row, ...]
     sdf_projection_rows: tuple[Phase9Row, ...]
+    complex_surface_rows: tuple[Phase9Row, ...]
+    performance_optimization_rows: tuple[Phase9Row, ...]
     three_way_external_rows: tuple[Phase9Row, ...]
     claim_rows: tuple[Phase9Row, ...]
     active_patch_history_rows: tuple[Phase9Row, ...]
@@ -52,9 +59,25 @@ def run_phase9_claim_gate() -> Phase9ClaimGate:
     runtime_rows = _runtime_rows(phase8)
     ablation_rows = _ablation_rows(phase8, single_scale)
     sdf_projection_rows = _sdf_projection_evidence_rows()
+    complex_surface_rows, performance_rows = _complex_surface_validation_and_performance_rows()
     three_way_external_rows = _three_way_external_evidence_rows()
-    claim_rows = _claim_rows(phase8, single_scale, sdf_projection_rows, three_way_external_rows)
-    summary = _summary(phase8, single_scale, sdf_projection_rows, three_way_external_rows, claim_rows)
+    claim_rows = _claim_rows(
+        phase8,
+        single_scale,
+        sdf_projection_rows,
+        complex_surface_rows,
+        performance_rows,
+        three_way_external_rows,
+    )
+    summary = _summary(
+        phase8,
+        single_scale,
+        sdf_projection_rows,
+        complex_surface_rows,
+        performance_rows,
+        three_way_external_rows,
+        claim_rows,
+    )
     return Phase9ClaimGate(
         phase8=phase8,
         static_completeness_rows=tuple(static_rows),
@@ -63,6 +86,8 @@ def run_phase9_claim_gate() -> Phase9ClaimGate:
         runtime_rows=tuple(runtime_rows),
         ablation_rows=tuple(ablation_rows),
         sdf_projection_rows=tuple(sdf_projection_rows),
+        complex_surface_rows=tuple(complex_surface_rows),
+        performance_optimization_rows=tuple(performance_rows),
         three_way_external_rows=tuple(three_way_external_rows),
         claim_rows=tuple(claim_rows),
         active_patch_history_rows=tuple(phase8.moving_contact_history_rows),
@@ -85,6 +110,8 @@ def write_phase9_claim_gate(result: Phase9ClaimGate, output_dir: str | Path) -> 
     _write_csv(tables / "runtime_scaling.csv", result.runtime_rows)
     _write_csv(tables / "ablation_summary.csv", result.ablation_rows)
     _write_csv(tables / "sdf_patch_projection.csv", result.sdf_projection_rows)
+    _write_csv(tables / "complex_surface_moving_contact.csv", result.complex_surface_rows)
+    _write_csv(tables / "performance_optimization.csv", result.performance_optimization_rows)
     _write_csv(tables / "three_way_external_fem.csv", result.three_way_external_rows)
     _write_csv(tables / "claim_gate.csv", result.claim_rows)
     _write_csv(tables / "active_patch_history.csv", result.active_patch_history_rows)
@@ -320,6 +347,137 @@ def _sdf_projection_evidence_rows() -> list[Phase9Row]:
     return rows
 
 
+def _complex_surface_validation_and_performance_rows() -> tuple[list[Phase9Row], list[Phase9Row]]:
+    case = _curved_triangulated_surface_case()
+    mesh = case["mesh"]
+    surface = case["surface"]
+    frames = case["frames"]
+    coarse = case["coarse"]
+    medium = case["medium"]
+    fine_overlap = case["fine_overlap"]
+    coarse_bases = case["coarse_bases"]
+    medium_bases = case["medium_bases"]
+    fine_overlap_bases = case["fine_overlap_bases"]
+    penalty = 100.0
+    config = AdaptivePatchActivationConfig(
+        neighbor_depth=1,
+        fine_neighbor_depth=1,
+        deactivate_delay=4,
+        alpha_blend=0.35,
+        max_active_patches=34,
+        projection_error_refine_threshold=0.0,
+        use_overlap_weights=True,
+    )
+
+    def run_active_sequence():
+        return run_multiscale_adaptive_patch_sequence(
+            mesh,
+            surface,
+            coarse,
+            coarse_bases,
+            medium,
+            medium_bases,
+            fine_overlap,
+            fine_overlap_bases,
+            frames,
+            penalty=penalty,
+            config=config,
+        )
+
+    active_wall_time, active_result = _median_wall_time(run_active_sequence, repeats=2)
+    contact_band = np.asarray(case["contact_triangle_indices"], dtype=np.int64)
+    normals = surface.normals[contact_band]
+    mean_normal = np.mean(normals, axis=0)
+    mean_normal = mean_normal / max(float(np.linalg.norm(mean_normal)), 1.0e-30)
+    max_normal_variation_deg = float(np.degrees(np.max(np.arccos(np.clip(normals @ mean_normal, -1.0, 1.0)))))
+    unique_requested = len({patch_id for step in active_result.steps for patch_id in step.requested_patch_ids})
+    min_gap_history = [float(np.min(step.samples.gaps)) if step.samples.sample_count else 0.0 for step in active_result.steps]
+    active_fraction = active_result.max_active_patch_count / max(active_result.total_patch_count, 1)
+    complex_row = {
+        "case": "warped_triangulated_surface_moving_contact",
+        "surface_triangle_count": int(surface.triangles.shape[0]),
+        "contact_band_triangle_count": int(contact_band.size),
+        "max_contact_normal_variation_deg": max_normal_variation_deg,
+        "moving_contact_steps": len(frames),
+        "unique_requested_patch_count": int(unique_requested),
+        "max_active_patch_count": int(active_result.max_active_patch_count),
+        "total_patch_count": int(active_result.total_patch_count),
+        "active_patch_fraction": float(active_fraction),
+        "mean_projection_error": float(active_result.mean_projection_error),
+        "mean_coarse_projection_error": float(active_result.mean_coarse_projection_error),
+        "max_force_jump": float(active_result.max_force_jump),
+        "max_gap_jump": float(_max_relative_jump(np.asarray(min_gap_history, dtype=float))),
+        "optimized_active_wall_time_seconds": float(active_wall_time),
+        "gate_threshold": "triangles >= 300; normal variation > 8 deg; unique patches > 4; active fraction < 0.25; projection error < coarse; jumps < 0.2",
+        "passed": int(
+            int(surface.triangles.shape[0]) >= 300
+            and max_normal_variation_deg > 8.0
+            and unique_requested > 4
+            and active_fraction < 0.25
+            and active_result.mean_projection_error < active_result.mean_coarse_projection_error
+            and active_result.max_force_jump < 0.2
+            and _max_relative_jump(np.asarray(min_gap_history, dtype=float)) < 0.2
+        ),
+    }
+
+    levels = (coarse, medium, fine_overlap)
+
+    def run_uncached_detector() -> int:
+        sample_count = 0
+        for points, areas in frames:
+            for level in levels:
+                samples = detect_sdf_contact_samples(points, surface, level, penalty=penalty, sample_areas=areas)
+                sample_count += samples.sample_count
+        return sample_count
+
+    def run_cached_detector() -> int:
+        sample_count = 0
+        for points, areas in frames:
+            query = query_signed_distances(points, surface)
+            for level in levels:
+                samples = contact_samples_from_sdf_query(
+                    points,
+                    surface,
+                    level,
+                    penalty=penalty,
+                    query=query,
+                    sample_areas=areas,
+                )
+                sample_count += samples.sample_count
+        return sample_count
+
+    uncached_wall_time, uncached_samples = _median_wall_time(run_uncached_detector, repeats=2)
+    cached_wall_time, cached_samples = _median_wall_time(run_cached_detector, repeats=2)
+    measured_speedup = uncached_wall_time / max(cached_wall_time, 1.0e-30)
+    performance_rows = [
+        {
+            "case": "cached_multiscale_sdf_mapping",
+            "optimization": "reuse one signed-distance query across coarse/medium/fine patch levels",
+            "baseline_sdf_query_count": len(frames) * len(levels),
+            "optimized_sdf_query_count": len(frames),
+            "uncached_wall_time_seconds": float(uncached_wall_time),
+            "cached_wall_time_seconds": float(cached_wall_time),
+            "measured_speedup": float(measured_speedup),
+            "sample_count_delta": int(abs(int(uncached_samples) - int(cached_samples))),
+            "gate_threshold": "speedup > 1.4 and identical active sample count",
+            "passed": int(measured_speedup > 1.4 and int(uncached_samples) == int(cached_samples)),
+        },
+        {
+            "case": "optimized_active_patch_sequence",
+            "optimization": "cached SDF mapping plus cached basis maps for active patch projection",
+            "optimized_active_wall_time_seconds": float(active_wall_time),
+            "max_active_patch_count": int(active_result.max_active_patch_count),
+            "total_patch_count": int(active_result.total_patch_count),
+            "active_patch_fraction": float(active_fraction),
+            "estimated_active_vs_full_patch_runtime_ratio": float(active_result.mean_runtime_ratio),
+            "estimated_active_vs_full_patch_speedup": float(1.0 / max(active_result.mean_runtime_ratio, 1.0e-30)),
+            "gate_threshold": "active fraction < 0.25 and runtime ratio < 0.25",
+            "passed": int(active_fraction < 0.25 and active_result.mean_runtime_ratio < 0.25),
+        },
+    ]
+    return [complex_row], performance_rows
+
+
 def _three_way_external_evidence_rows() -> list[Phase9Row]:
     linear_report = _load_three_way_report(
         live_path=_repo_root() / "outputs" / "calculix_three_way" / "three_way_report.json",
@@ -405,6 +563,8 @@ def _claim_rows(
     phase8: Phase8ValidationMatrix,
     single_scale: dict[str, float | int],
     sdf_projection_rows: list[Phase9Row],
+    complex_surface_rows: list[Phase9Row],
+    performance_rows: list[Phase9Row],
     three_way_external_rows: list[Phase9Row],
 ) -> list[Phase9Row]:
     summary = phase8.summary
@@ -465,7 +625,7 @@ def _claim_rows(
         },
         {
             "claim_id": 6,
-            "claim": "Multi-scale overlapping patch activation handles moving contact over patch boundaries and improves the accuracy/efficiency balance.",
+            "claim": "Multi-scale overlapping patch activation handles moving contact over patch boundaries, including a warped triangular surface case.",
             "passed": int(
                 float(summary["moving_contact_force_jump"]) < 5.0e-2
                 and float(summary["moving_contact_gap_jump"]) < 5.0e-2
@@ -473,8 +633,10 @@ def _claim_rows(
                 and multi_error <= single_error
                 and float(summary["large_active_patch_fraction"]) < 0.35
                 and float(summary["large_runtime_ratio_active_vs_full_patch"]) < 0.35
+                and len(complex_surface_rows) > 0
+                and all(int(row["passed"]) == 1 for row in complex_surface_rows)
             ),
-            "metric": "force_jump_gap_jump_unique_requested_patches_multi_error_single_error_active_fraction_runtime_ratio",
+            "metric": "force_jump_gap_jump_unique_requested_patches_multi_error_single_error_active_fraction_runtime_ratio_complex_cases",
             "value": (
                 f"{summary['moving_contact_force_jump']:.6g};"
                 f"{summary['moving_contact_gap_jump']:.6g};"
@@ -482,9 +644,10 @@ def _claim_rows(
                 f"{multi_error:.6g};"
                 f"{single_error:.6g};"
                 f"{summary['large_active_patch_fraction']:.6g};"
-                f"{summary['large_runtime_ratio_active_vs_full_patch']:.6g}"
+                f"{summary['large_runtime_ratio_active_vs_full_patch']:.6g};"
+                f"{sum(int(row['passed']) for row in complex_surface_rows)} / {len(complex_surface_rows)}"
             ),
-            "threshold": "< 0.05; < 0.05; > 1; multi <= single; active/runtime < 0.35",
+            "threshold": "< 0.05; < 0.05; > 1; multi <= single; active/runtime < 0.35; all complex surface cases pass",
         },
         {
             "claim_id": 7,
@@ -494,6 +657,14 @@ def _claim_rows(
             "value": f"{sum(int(row['passed']) for row in three_way_external_rows)} / {len(three_way_external_rows)}",
             "threshold": "linear and nonlinear external FEM evidence cases pass",
         },
+        {
+            "claim_id": 8,
+            "claim": "The implementation now has measured performance evidence from cached SDF mapping and active patch evaluation.",
+            "passed": int(len(performance_rows) > 0 and all(int(row["passed"]) == 1 for row in performance_rows)),
+            "metric": "performance_optimization_case_pass_count",
+            "value": f"{sum(int(row['passed']) for row in performance_rows)} / {len(performance_rows)}",
+            "threshold": "all performance optimization evidence cases pass",
+        },
     ]
 
 
@@ -501,6 +672,8 @@ def _summary(
     phase8: Phase8ValidationMatrix,
     single_scale: dict[str, float | int],
     sdf_projection_rows: list[Phase9Row],
+    complex_surface_rows: list[Phase9Row],
+    performance_rows: list[Phase9Row],
     three_way_external_rows: list[Phase9Row],
     claim_rows: list[Phase9Row],
 ) -> dict[str, float | int | str]:
@@ -516,6 +689,10 @@ def _summary(
         "multi_scale_patch_alpha_dofs": int(phase8.summary["large_multiscale_patch_alpha_dofs"]),
         "sdf_projection_cases": len(sdf_projection_rows),
         "sdf_projection_cases_passed": int(sum(int(row["passed"]) for row in sdf_projection_rows)),
+        "complex_surface_cases": len(complex_surface_rows),
+        "complex_surface_cases_passed": int(sum(int(row["passed"]) for row in complex_surface_rows)),
+        "performance_optimization_cases": len(performance_rows),
+        "performance_optimization_cases_passed": int(sum(int(row["passed"]) for row in performance_rows)),
         "three_way_external_cases": len(three_way_external_rows),
         "three_way_external_cases_passed": int(sum(int(row["passed"]) for row in three_way_external_rows)),
     }
@@ -544,6 +721,8 @@ def _write_claims_markdown(path: Path, result: Phase9ClaimGate) -> None:
         [
             "\n## Evidence Tables\n\n",
             "- `sdf_patch_projection.csv`: SDF sample to active patch ILC mapping, force conservation, and zero dynamic-state contribution.\n",
+            "- `complex_surface_moving_contact.csv`: warped triangular surface moving-contact validation.\n",
+            "- `performance_optimization.csv`: cached SDF mapping and active patch performance evidence.\n",
             "- `three_way_external_fem.csv`: Python full FEM, adaptive ROM, and CalculiX external FEM comparison.\n",
         ]
     )
@@ -562,41 +741,98 @@ def _write_phase9_figures(result: Phase9ClaimGate, figures: Path) -> None:
     _plot_active_patch_history(figures / "active_patch_history.png", result, plt)
     _plot_runtime_scaling(figures / "runtime_scaling.png", result, plt)
     _plot_sdf_projection_evidence(figures / "sdf_patch_projection_map.png", result, plt)
+    _plot_complex_surface_case(figures / "complex_surface_moving_contact.png", plt)
+    _plot_performance_optimization(figures / "performance_optimization.png", result, plt)
 
 
 def _plot_method_pipeline(path: Path, plt) -> None:
-    fig, ax = plt.subplots(figsize=(10.5, 3.2), constrained_layout=True)
+    import matplotlib.patches as patches
+
+    fig, ax = plt.subplots(figsize=(11.2, 5.2), constrained_layout=True)
     ax.axis("off")
-    labels = [
-        "FEM mesh",
-        "Surface patches",
-        "Patch load basis",
-        "Residual ILC",
-        "SDF active set",
-        "Claim gate",
+    panels = [
+        (0.03, 0.56, 0.15, 0.34, "a  full FEM\nmoving contact"),
+        (0.22, 0.56, 0.15, 0.34, "b  SDF query\ntriangle/gap/normal"),
+        (0.41, 0.56, 0.15, 0.34, "c  patch load\narea weighting"),
+        (0.60, 0.56, 0.15, 0.34, "d  residual ILC\nlocal compliance"),
+        (0.79, 0.56, 0.18, 0.34, "e  active alpha\noutside main DAE"),
     ]
-    xs = np.linspace(0.08, 0.92, len(labels))
-    for x, label in zip(xs, labels):
-        ax.text(
-            x,
-            0.55,
-            label,
-            ha="center",
-            va="center",
-            fontsize=10,
-            bbox={"boxstyle": "round,pad=0.35", "facecolor": "#f7f7f7", "edgecolor": "#333333"},
-            transform=ax.transAxes,
+    for x, y, width, height, label in panels:
+        ax.add_patch(
+            patches.Rectangle(
+                (x, y),
+                width,
+                height,
+                linewidth=1.1,
+                edgecolor="#333333",
+                facecolor="#f7f7f7",
+                transform=ax.transAxes,
+            )
         )
-    for x0, x1 in zip(xs[:-1], xs[1:]):
+        ax.text(x + 0.012, y + height - 0.055, label, ha="left", va="top", fontsize=9.2, transform=ax.transAxes)
+
+    ax.add_patch(patches.Rectangle((0.055, 0.63), 0.09, 0.10, angle=-8, color="#b9c7d8", transform=ax.transAxes))
+    ax.plot([0.07, 0.10, 0.13], [0.80, 0.83, 0.79], color="#d55e00", linewidth=2, transform=ax.transAxes)
+    ax.scatter([0.10], [0.83], s=45, color="#d55e00", transform=ax.transAxes)
+
+    tri = patches.Polygon([[0.255, 0.65], [0.335, 0.65], [0.295, 0.78]], closed=True, fill=False, edgecolor="#4c78a8", transform=ax.transAxes)
+    ax.add_patch(tri)
+    ax.annotate("", xy=(0.298, 0.70), xytext=(0.318, 0.83), arrowprops={"arrowstyle": "->", "color": "#d55e00"}, xycoords=ax.transAxes)
+    ax.text(0.303, 0.78, "gap", fontsize=8, color="#d55e00", transform=ax.transAxes)
+
+    for i in range(4):
+        for j in range(3):
+            ax.add_patch(
+                patches.Rectangle(
+                    (0.435 + 0.025 * i, 0.64 + 0.045 * j),
+                    0.023,
+                    0.040,
+                    linewidth=0.6,
+                    edgecolor="#666666",
+                    facecolor="#dcecc9" if i in (1, 2) else "#ffffff",
+                    transform=ax.transAxes,
+                )
+            )
+    ax.annotate("sum Fn", xy=(0.49, 0.75), xytext=(0.50, 0.64), fontsize=7.5, arrowprops={"arrowstyle": "->"}, xycoords=ax.transAxes, textcoords=ax.transAxes)
+
+    xs = np.linspace(0.63, 0.72, 80)
+    ax.plot(xs, 0.69 + 0.04 * np.sin(80 * xs), color="#4c78a8", linewidth=1.8, transform=ax.transAxes)
+    ax.plot(xs, 0.73 + 0.02 * np.sin(105 * xs), color="#f28e2b", linewidth=1.5, transform=ax.transAxes)
+    ax.text(0.635, 0.61, "static attachment\n- modal part", fontsize=7.5, transform=ax.transAxes)
+
+    ax.add_patch(patches.Rectangle((0.815, 0.66), 0.07, 0.08, linewidth=1.0, edgecolor="#4c78a8", facecolor="#e8f1fb", transform=ax.transAxes))
+    ax.add_patch(patches.Rectangle((0.895, 0.66), 0.045, 0.08, linewidth=1.0, edgecolor="#d55e00", facecolor="#fde8d6", transform=ax.transAxes))
+    ax.text(0.850, 0.70, "q", ha="center", va="center", fontsize=12, transform=ax.transAxes)
+    ax.text(0.918, 0.70, "alpha", ha="center", va="center", fontsize=9, transform=ax.transAxes)
+    ax.annotate("", xy=(0.895, 0.70), xytext=(0.885, 0.70), arrowprops={"arrowstyle": "->"}, xycoords=ax.transAxes)
+
+    for (x0, _y0, width0, _h0, _label0), (x1, _y1, _width1, _h1, _label1) in zip(panels[:-1], panels[1:]):
         ax.annotate(
             "",
-            xy=(x1 - 0.06, 0.55),
-            xytext=(x0 + 0.06, 0.55),
-            arrowprops={"arrowstyle": "->", "linewidth": 1.4, "color": "#333333"},
+            xy=(x1 - 0.012, 0.73),
+            xytext=(x0 + width0 + 0.012, 0.73),
+            arrowprops={"arrowstyle": "->", "linewidth": 1.2, "color": "#333333"},
             xycoords=ax.transAxes,
             textcoords=ax.transAxes,
         )
-    ax.set_title("Patch residual ILC validation pipeline")
+
+    ladder = [
+        "static\ncompleteness",
+        "SDF\nprojection",
+        "quasi-static\ncontact",
+        "moving\ncontact",
+        "warped\nsurface",
+        "CalculiX\nthree-way",
+        "performance\nscaling",
+    ]
+    ladder_xs = np.linspace(0.08, 0.92, len(ladder))
+    for index, (x, label) in enumerate(zip(ladder_xs, ladder)):
+        ax.scatter([x], [0.28], s=145, color="#59a14f", edgecolor="#333333", linewidth=0.7, transform=ax.transAxes, zorder=3)
+        ax.text(x, 0.28, str(index + 1), ha="center", va="center", color="white", fontsize=9, transform=ax.transAxes, zorder=4)
+        ax.text(x, 0.18, label, ha="center", va="top", fontsize=8.2, transform=ax.transAxes)
+    ax.plot(ladder_xs, [0.28] * len(ladder_xs), color="#333333", linewidth=1.0, transform=ax.transAxes, zorder=2)
+    ax.text(0.03, 0.36, "validation ladder", ha="left", va="center", fontsize=9.5, fontweight="bold", transform=ax.transAxes)
+    ax.set_title("SDF-driven patch residual ILC for moving surface contact")
     fig.savefig(path, dpi=180)
     plt.close(fig)
 
@@ -689,6 +925,80 @@ def _plot_sdf_projection_evidence(path: Path, result: Phase9ClaimGate, plt) -> N
     plt.close(fig)
 
 
+def _plot_complex_surface_case(path: Path, plt) -> None:
+    case = _curved_triangulated_surface_case()
+    surface = case["surface"]
+    frames = case["frames"]
+    contact_path = []
+    for points, _areas in frames:
+        if points.size:
+            contact_path.append(np.mean(points, axis=0))
+    path_points = np.asarray(contact_path, dtype=float)
+    fig = plt.figure(figsize=(8.6, 5.8), constrained_layout=True)
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot_trisurf(
+        surface.nodes[:, 0],
+        surface.nodes[:, 1],
+        surface.nodes[:, 2],
+        triangles=surface.triangles,
+        color="#b9c7d8",
+        alpha=0.34,
+        linewidth=0.2,
+        edgecolor="#6b7280",
+    )
+    if path_points.size:
+        ax.plot(path_points[:, 0], path_points[:, 1], path_points[:, 2], color="#d55e00", linewidth=2.2)
+        ax.scatter(path_points[[0, -1], 0], path_points[[0, -1], 1], path_points[[0, -1], 2], color="#0072b2", s=26)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    ax.set_title("Warped triangular surface moving contact case")
+    ax.view_init(elev=18, azim=-60)
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_performance_optimization(path: Path, result: Phase9ClaimGate, plt) -> None:
+    rows = list(result.performance_optimization_rows)
+    detector = next((row for row in rows if row["case"] == "cached_multiscale_sdf_mapping"), None)
+    active = next((row for row in rows if row["case"] == "optimized_active_patch_sequence"), None)
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.2), constrained_layout=True)
+    if detector is not None:
+        axes[0].bar(
+            ["uncached", "cached"],
+            [float(detector["uncached_wall_time_seconds"]), float(detector["cached_wall_time_seconds"])],
+            color=["#4c78a8", "#59a14f"],
+        )
+        axes[0].set_ylabel("wall time (s)")
+        axes[0].set_title(f"SDF mapping speedup {float(detector['measured_speedup']):.2f}x")
+    if active is not None:
+        active_count = float(active["max_active_patch_count"])
+        inactive_count = float(active["total_patch_count"]) - active_count
+        axes[1].bar(
+            ["patches"],
+            [active_count],
+            color="#f28e2b",
+            label="active",
+        )
+        axes[1].bar(
+            ["patches"],
+            [inactive_count],
+            bottom=[active_count],
+            color="#d9d9d9",
+            label="inactive",
+        )
+        axes[1].set_ylabel("patch count")
+        axes[1].set_title(
+            f"active fraction {float(active['active_patch_fraction']):.2f}, "
+            f"proxy speedup {float(active['estimated_active_vs_full_patch_speedup']):.1f}x"
+        )
+        axes[1].legend(fontsize=8)
+    for ax in axes:
+        ax.grid(True, axis="y", alpha=0.3)
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
 def _copy_three_way_figures(rows: tuple[Phase9Row, ...], figures: Path) -> None:
     figure_map = {
         "linear_dynamic_three_way": "three_way_dynamic_displacement.png",
@@ -766,3 +1076,102 @@ def _sliding_frames(surface: Any, steps: int) -> list[tuple[np.ndarray, np.ndarr
             areas.append(surface.areas[triangle_id])
         frames.append((np.asarray(points, dtype=float), np.asarray(areas, dtype=float)))
     return frames
+
+
+def _curved_triangulated_surface_case() -> dict[str, Any]:
+    base = cantilever_block(nx=4, ny=10, nz=3, length=4.0, width=1.2, height=1.0, stiffness_scale=100.0)
+    nodes = base.mesh.nodes.copy()
+    x_max = float(nodes[:, 0].max())
+    y_min, y_max = float(nodes[:, 1].min()), float(nodes[:, 1].max())
+    z_min, z_max = float(nodes[:, 2].min()), float(nodes[:, 2].max())
+    xi = nodes[:, 0] / max(x_max, 1.0e-30)
+    eta = (nodes[:, 1] - y_min) / max(y_max - y_min, 1.0e-30)
+    zeta = (nodes[:, 2] - z_min) / max(z_max - z_min, 1.0e-30)
+    right_weight = xi**2
+    nodes[:, 0] += right_weight * 0.22 * np.sin(2.0 * np.pi * eta) * np.cos(np.pi * zeta)
+    nodes[:, 1] += right_weight * 0.04 * np.sin(np.pi * xi) * np.sin(2.0 * np.pi * zeta)
+    nodes[:, 2] += right_weight * 0.07 * np.sin(np.pi * eta) * np.sin(2.0 * np.pi * zeta)
+    mesh = Mesh(nodes, base.mesh.elements, base.mesh.element_type)
+    surface = extract_surface(mesh)
+    hierarchy = build_patch_hierarchy(
+        surface,
+        coarse_bins=(1, 1),
+        medium_bins=(5, 3),
+        fine_bins=(8, 4),
+    )
+    coarse = hierarchy.level("coarse")
+    medium = hierarchy.level("medium")
+    fine_overlap = hierarchy.level("fine_overlap")
+    frames, contact_triangle_indices = _curved_surface_sliding_frames(surface, steps=35)
+    return {
+        "mesh": mesh,
+        "surface": surface,
+        "coarse": coarse,
+        "medium": medium,
+        "fine_overlap": fine_overlap,
+        "coarse_bases": build_normal_patch_load_bases(mesh, surface, coarse.patches),
+        "medium_bases": build_normal_patch_load_bases(mesh, surface, medium.patches),
+        "fine_overlap_bases": build_normal_patch_load_bases(mesh, surface, fine_overlap.patches),
+        "frames": frames,
+        "contact_triangle_indices": contact_triangle_indices,
+    }
+
+
+def _curved_surface_sliding_frames(surface: Any, steps: int) -> tuple[list[tuple[np.ndarray, np.ndarray]], np.ndarray]:
+    x_cut = float(np.quantile(surface.centroids[:, 0], 0.82))
+    contact_triangles = np.flatnonzero((surface.normals[:, 0] > 0.45) & (surface.centroids[:, 0] >= x_cut))
+    if contact_triangles.size < 10:
+        contact_triangles = np.flatnonzero(surface.normals[:, 0] > 0.30)
+    if contact_triangles.size == 0:
+        raise RuntimeError("curved surface moving contact case needs a positive-x contact band")
+    yz = surface.centroids[contact_triangles][:, 1:3]
+    y_min, y_max = float(yz[:, 0].min()), float(yz[:, 0].max())
+    z_min, z_max = float(yz[:, 1].min()), float(yz[:, 1].max())
+    y_span = max(y_max - y_min, 1.0e-30)
+    z_span = max(z_max - z_min, 1.0e-30)
+    centers = np.linspace(y_min + 0.15 * y_span, y_max - 0.15 * y_span, steps)
+    radius_y = 0.28 * y_span
+    radius_z = 0.45 * z_span
+    base_penetration = 0.012
+    frames: list[tuple[np.ndarray, np.ndarray]] = []
+    for step_id, y0 in enumerate(centers):
+        z0 = 0.18 * z_span * np.sin(2.0 * np.pi * step_id / max(steps - 1, 1))
+        points = []
+        areas = []
+        for triangle_id in contact_triangles:
+            centroid = surface.centroids[int(triangle_id)]
+            dy = (centroid[1] - y0) / max(radius_y, 1.0e-30)
+            dz = (centroid[2] - z0) / max(radius_z, 1.0e-30)
+            weight = max(0.0, 1.0 - dy * dy - dz * dz)
+            if weight <= 0.0:
+                continue
+            points.append(centroid - base_penetration * weight * surface.normals[int(triangle_id)])
+            areas.append(surface.areas[int(triangle_id)])
+        if points:
+            frame_points = np.asarray(points, dtype=float)
+            frame_areas = np.asarray(areas, dtype=float)
+        else:
+            frame_points = np.zeros((0, 3), dtype=float)
+            frame_areas = np.zeros(0, dtype=float)
+        frames.append((frame_points, frame_areas))
+    return frames, contact_triangles
+
+
+def _median_wall_time(callable_obj, repeats: int = 2) -> tuple[float, Any]:
+    durations: list[float] = []
+    payload: Any = None
+    for _ in range(repeats):
+        start = time.perf_counter()
+        payload = callable_obj()
+        durations.append(time.perf_counter() - start)
+    return float(np.median(durations)), payload
+
+
+def _max_relative_jump(values: np.ndarray) -> float:
+    if values.size <= 1:
+        return 0.0
+    jumps = []
+    for previous, current in zip(values[:-1], values[1:]):
+        scale = max(abs(float(previous)), abs(float(current)), 1.0e-30)
+        jumps.append(abs(float(current) - float(previous)) / scale)
+    return float(max(jumps, default=0.0))

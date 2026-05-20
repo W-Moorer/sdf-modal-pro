@@ -58,7 +58,7 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 
 第三段：验证证据。
 
-- 通过静态完备性、SDF 映射、准静态接触、移动接触、CalculiX 三方验证和 scaling estimate 进行验证。
+- 通过静态完备性、SDF 映射、准静态接触、规则与复杂三角网格移动接触、CalculiX 三方验证、实测 SDF 查询复用加速和 scaling estimate 进行验证。
 - 报告最能支撑摘要结论的硬数字：静态完备性误差 `2.180325e-17`；低阶模态准静态力误差 `0.831666`，补丁剩余 ILC 恢复到 `0`；移动接触 force jump `0.019911`，gap jump `0.00897824`；非线性接触中 Python full FEM vs CalculiX 位移相对误差 `0.005014`；patch alpha DOFs `40`，低于 node-level contact DOFs `69`。
 - 建立全阶 FEM、自适应 ROM 和外部开源 FEM 求解器的三方验证路线，用于降低同源代码自证的风险。
 - 消融对比作为内部一致性检查和附录材料，不在正文中单独设置验收式章节。
@@ -121,7 +121,7 @@ SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact 
 - Panel c：surface triangles 聚合到 patch load basis，突出面积加权和总法向力守恒。
 - Panel d：patch residual modes 恢复低阶模态遗漏的局部静态柔度。
 - Panel e：active patch ILC 位于主 DAE 状态之外，活动补丁变化不改变主动态维度。
-- Panel f：validation ladder，依次显示 static completeness -> SDF projection -> quasistatic contact -> moving contact -> CalculiX three-way -> scaling estimate。
+- Panel f：validation ladder，依次显示 static completeness -> SDF projection -> quasistatic contact -> moving contact -> warped triangular surface -> CalculiX three-way -> performance/scaling estimate。
 
 #### 2.2 局部接触响应的收敛判据
 
@@ -320,7 +320,7 @@ Claim-first 开头句：
 
 Claim-first 开头句：
 
-> 为了检验活动补丁集合变化是否会引入不连续接触响应，我们让接触区域跨越补丁边界移动，并测量接触力、间隙、活动补丁数量和能量漂移。
+> 为了检验活动补丁集合变化是否会引入不连续接触响应，并检验该策略能否从规则表面推广到复杂三角网格表面，我们让接触区域分别在规则侧面和 warped triangular surface 上跨越补丁边界移动，并测量接触力、间隙、活动补丁数量、投影误差和能量漂移。
 
 指标：
 
@@ -329,12 +329,22 @@ Claim-first 开头句：
 - 活动补丁数量。
 - 运行时间比例。
 - 能量漂移。
+- 复杂三角网格表面的法向变化角、接触带三角形数量和活动补丁比例。
 
 预期结果：
 
 - force jump < 5%。
 - gap jump < 5%。
 - 自适应活动补丁的能量漂移不高于全活动补丁基准。
+- 复杂三角网格表面算例：surface triangles = 328，contact-band triangles = 58，max normal variation = 47.55 deg，unique requested patches = 54，active patch fraction = 0.1328。
+- 复杂三角网格表面算例中 multi-scale projection error = 0.358，coarse-only projection error = 0.860，说明复杂表面上细化活动补丁仍能降低投影误差。
+
+预期图表：
+
+- `active_patch_history.png`
+- `active_patch_history.csv`
+- `complex_surface_moving_contact.png`
+- `complex_surface_moving_contact.csv`
 
 #### 6.5 CalculiX 三方验证
 
@@ -376,11 +386,11 @@ Claim-first 开头句：
 - `three_way_nonlinear_contact_displacement.png`
 - `three_way_nonlinear_contact_activity.png`
 
-#### 6.6 Scaling estimate 与活动补丁代价分析
+#### 6.6 Scaling estimate 与性能优化证据
 
 Claim-first 开头句：
 
-> 为了检验活动补丁策略是否降低接触坐标规模和求解代价来源，我们比较全补丁、节点级 ILC、粗补丁和多尺度活动补丁的自由度、runtime proxy 和 memory proxy。
+> 为了检验活动补丁策略是否降低接触坐标规模和接触映射代价，我们比较全补丁、节点级 ILC、粗补丁和多尺度活动补丁的自由度、runtime proxy、memory proxy，并对优化前后的多尺度 SDF 映射执行实测 wall-time 对比。
 
 对比对象：
 
@@ -389,6 +399,9 @@ Claim-first 开头句：
 - node-level ILC 估计。
 - coarse-only patch。
 - multi-scale patch。
+- uncached multi-scale SDF mapping。
+- cached multi-scale SDF mapping。
+- optimized active patch sequence。
 
 指标：
 
@@ -398,16 +411,22 @@ Claim-first 开头句：
 - active patch fraction。
 - solver-dimension speedup。
 - runtime proxy 和 memory proxy。
+- baseline/optimized SDF query count。
+- cached-vs-uncached SDF mapping measured speedup。
+- optimized active patch sequence wall time。
 
 写作定位：
 
-- 这是 scalability estimate 和 active-patch cost analysis，不是完整大规模全阶 FEM 时间积分基准。
-- 只用于说明活动补丁策略的规模化趋势和计算代价来源。
+- 这是 scalability estimate、active-patch cost analysis 和接触映射内核的实测优化证据，不把小型 Python 原型的全流程 wall time 当作最终工业级全阶 FEM 基准。
+- 性能结论应落在两个硬证据上：一是 cached SDF mapping 将 coarse/medium/fine 三层最近三角形查询从 105 次降到 35 次，实测加速约 3.02x；二是复杂三角网格算例中活动补丁比例为 0.1328，对应 active-vs-full patch runtime proxy speedup = 7.53x。
+- 因此最终结论可以突出本文优势：方法不是只降低主 DAE 维度，也降低了移动接触过程中需要评估和更新的局部补丁坐标规模。
 
 预期图表：
 
 - `runtime_scaling.csv`
 - `runtime_scaling.png`
+- `performance_optimization.csv`
+- `performance_optimization.png`
 
 ### 7 结论
 
@@ -422,7 +441,7 @@ Claim-first 开头句：
 
 - 静态完备性和柔度恢复已经验证。
 - 移动接触中的力跳变和间隙跳变受到约束。
-- SDF 映射验证、准静态接触、移动接触、CalculiX 三方验证和 scaling estimate 支撑该方法。
+- SDF 映射验证、准静态接触、规则与复杂三角网格移动接触、CalculiX 三方验证、实测 SDF 映射优化和 scaling estimate 支撑该方法。
 - 消融对比可作为附录或补充材料，用于说明各模块对精度和效率的贡献。
 
 第三段：局限与未来工作。
@@ -442,7 +461,9 @@ Claim-first 开头句：
 6. `three_way_dynamic_displacement.png`：线性动力学三方位移时程对比。
 7. `three_way_nonlinear_contact_displacement.png`：非线性接触三方位移时程对比。
 8. `three_way_nonlinear_contact_activity.png`：非线性接触穿透量和接触力活动证据。
-9. `runtime_scaling.png`：scaling estimate 和活动补丁代价对比。
+9. `complex_surface_moving_contact.png`：复杂三角网格表面上的移动接触轨迹和接触带。
+10. `performance_optimization.png`：cached SDF mapping 实测加速和活动补丁比例。
+11. `runtime_scaling.png`：scaling estimate 和活动补丁代价对比。
 
 ### 表
 
@@ -451,9 +472,11 @@ Claim-first 开头句：
 3. `sdf_patch_projection.csv`：单补丁、双补丁边界和无接触三类 SDF->patch ILC 映射算例。
 4. `compliance_error.csv`：柔度恢复。
 5. `contact_force_error.csv`：压入和动态接触力误差。
-6. `three_way_external_fem.csv`：项目内全阶 FEM、自适应 ROM、CalculiX 外部 FEM 三方验证算例。
-7. `runtime_scaling.csv`：scaling estimate 和活动补丁代价对比。
-8. `ablation_summary.csv`：A-E 模块对比，建议作为附录或补充材料。
+6. `complex_surface_moving_contact.csv`：warped triangular surface 移动接触算例。
+7. `three_way_external_fem.csv`：项目内全阶 FEM、自适应 ROM、CalculiX 外部 FEM 三方验证算例。
+8. `runtime_scaling.csv`：scaling estimate 和活动补丁代价对比。
+9. `performance_optimization.csv`：SDF 查询复用和活动补丁评估的性能优化证据。
+10. `ablation_summary.csv`：A-E 模块对比，建议作为附录或补充材料。
 
 ## 7. 内部证据映射（不作为正文章节）
 
@@ -465,7 +488,9 @@ Claim-first 开头句：
 | 补丁级 ILC 降低节点级规模。 | patch alpha DOFs = 40，node-level contact DOFs = 69。 | 已支撑 |
 | 活动补丁 ILC 不进入主 DAE，活动集合变化时主动态系统维度保持不变。 | DAE independence flag = 1；dynamic DOF ratio vs ordinary modes = 0.0769231。 | 已支撑 |
 | 多尺度重叠补丁激活改善跨补丁边界连续性和精度/效率平衡。 | force jump = 0.019911；gap jump = 0.00897824；multi-scale projection error = 0.269226，single-scale = 0.299569。 | 已支撑 |
+| 方法可以处理复杂三角网格外表面上的移动接触，而不只是在规则侧面上有效。 | `complex_surface_moving_contact.csv`：surface triangles = 328，contact-band triangles = 58，normal variation = 47.55 deg，unique requested patches = 54，active patch fraction = 0.1328，multi-scale projection error < coarse-only。 | 已补充 |
 | 三方验证说明结果不是同源 FEM/ROM 自证。 | `three_way_external_fem.csv` 覆盖线性动力学和 CalculiX 非线性 surface-to-surface contact；线性三方位移相对误差 < 5%，非线性接触矩阵一致性 < 1e-10，pressure-overclosure 标定误差 < 1e-6。 | 已补充 |
+| 性能优势不是只靠 proxy，而有接触映射内核实测优化证据。 | `performance_optimization.csv`：cached SDF mapping query count 105 -> 35，measured speedup = 3.023x，sample count delta = 0；active patch fraction = 0.1328，proxy speedup = 7.53x。 | 已补充 |
 
 ## 8. 自查清单
 
@@ -476,6 +501,7 @@ Claim-first 开头句：
 - alpha 是否始终被描述为活动补丁界面载荷坐标，而不是动态状态？
 - 摘要和引言中的每个结论点是否都能映射到数值算例、附录对比或三方外部 FEM 验证输出？
 - 第 6 节每个结果小节是否以 “为了检验……我们……” 的 claim-first 句式开头？
+- 是否没有把参数敏感性分析作为力学主线证据，而是把篇幅留给完备性、接触映射、三方验证和性能优化？
 - 图 1 是否是主叙事图，而不是只列模块名称的简单流程图？
 - 所有图表是否都服务于核心结论，而不是泛泛展示程序结果？
 - 局限性是否足够明确：无摩擦法向接触、原型规模动态 FEM 对比、未来工业规模验证？

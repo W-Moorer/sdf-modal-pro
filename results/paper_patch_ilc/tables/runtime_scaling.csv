@@ -4,4 +4,4 @@ patch_residual_ilc,8,166,166,166,23,90,28068.0,51678.0,stored_patch_blocks,store
 node_level_ilc_estimate,8,69,0,166,23,90,5273.0,22869.0,active_contact_nodes,active_contact_nodes,1,,,,
 coarse_only_patch,8,1,1,166,23,90,513.0,2673.0,active_patches,stored_residual_blocks,0,,,,
 multi_scale_patch_residual_ilc,8,40,40,166,23,90,2112.0,51678.0,active_patches,stored_residual_blocks,0,,,,
-small_dynamic_adaptive_rom,26,,,,,,,,,,,48,1.65929012088336,0.6026673620328842,6.292216659080565
+small_dynamic_adaptive_rom,26,,,,,,,,,,,48,1.4837523675907163,0.6739669110848852,6.292216659080565

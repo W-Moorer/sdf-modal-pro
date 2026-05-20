@@ -10,6 +10,8 @@ def test_phase9_ablation_claim_gate_meets_aim_outputs(tmp_path) -> None:
     assert {row["ablation"] for row in result.ablation_rows} == {"A", "B", "C", "D", "E"}
     assert all(int(row["passed"]) == 1 for row in result.claim_rows)
     assert result.summary["sdf_projection_cases_passed"] == result.summary["sdf_projection_cases"]
+    assert result.summary["complex_surface_cases_passed"] == result.summary["complex_surface_cases"]
+    assert result.summary["performance_optimization_cases_passed"] == result.summary["performance_optimization_cases"]
     assert result.summary["three_way_external_cases_passed"] == result.summary["three_way_external_cases"]
     assert result.summary["multi_scale_projection_error"] <= result.summary["single_scale_projection_error"]
     assert result.summary["multi_scale_patch_alpha_dofs"] < result.summary["node_level_contact_dofs"]
@@ -23,6 +25,8 @@ def test_phase9_ablation_claim_gate_meets_aim_outputs(tmp_path) -> None:
         "runtime_scaling.csv",
         "ablation_summary.csv",
         "sdf_patch_projection.csv",
+        "complex_surface_moving_contact.csv",
+        "performance_optimization.csv",
         "three_way_external_fem.csv",
         "claim_gate.csv",
     ]
@@ -36,6 +40,8 @@ def test_phase9_ablation_claim_gate_meets_aim_outputs(tmp_path) -> None:
         "active_patch_history.png",
         "runtime_scaling.png",
         "sdf_patch_projection_map.png",
+        "complex_surface_moving_contact.png",
+        "performance_optimization.png",
     ]
     for filename in expected_figures:
         assert (tmp_path / "figures" / filename).is_file()

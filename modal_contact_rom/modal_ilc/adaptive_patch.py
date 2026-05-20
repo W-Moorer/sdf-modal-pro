@@ -13,9 +13,11 @@ from modal_contact_rom.modal_ilc.sdf_projection import (
     ContactSampleSet,
     PatchILCProjection,
     assemble_sample_lumped_force_vector,
+    contact_samples_from_sdf_query,
     detect_sdf_contact_samples,
     total_nodal_force,
 )
+from modal_contact_rom.sdf_query.mesh_distance import query_signed_distances
 from modal_contact_rom.surface_patch.extract import SurfaceMesh
 from modal_contact_rom.surface_patch.patch_hierarchy import PatchLevel
 
@@ -304,8 +306,10 @@ class MultiScaleAdaptivePatchILCProjector:
         self.state = AdaptivePatchActivationState.empty()
         self._basis_by_key: dict[int, PatchLoadBasis] = {}
         self._basis_index_by_key: dict[int, int] = {}
+        self._basis_by_level: dict[int, dict[int, PatchLoadBasis]] = {}
         flat_index = 0
         for level in self.levels:
+            self._basis_by_level[level.level_index] = {basis.patch_id: basis for basis in level.load_bases}
             for basis in level.load_bases:
                 key = encode_multiscale_patch_id(level.level_index, basis.patch_id)
                 encoded = _basis_with_patch_key(level.name, key, basis)
@@ -315,12 +319,14 @@ class MultiScaleAdaptivePatchILCProjector:
         self.total_patch_count = sum(level.patch_level.patch_count for level in self.levels)
 
     def step(self, points: np.ndarray, areas: np.ndarray, penalty: float, step_id: int = 0) -> AdaptivePatchStepResult:
+        query = query_signed_distances(points, self.surface)
         samples_by_level = {
-            level.level_index: detect_sdf_contact_samples(
+            level.level_index: contact_samples_from_sdf_query(
                 points,
                 self.surface,
                 level.patch_level,
                 penalty=penalty,
+                query=query,
                 sample_areas=areas,
             )
             for level in self.levels
@@ -333,7 +339,7 @@ class MultiScaleAdaptivePatchILCProjector:
             self.mesh,
             self.surface,
             medium_samples,
-            {basis.patch_id: basis for basis in medium_level.load_bases},
+            self._basis_by_level[medium_level.level_index],
             medium_alpha,
         )
         fine_needed = self._needs_fine_refinement(medium_samples, medium_error)
@@ -385,7 +391,7 @@ class MultiScaleAdaptivePatchILCProjector:
         )
 
     def _target_alpha_for_level(self, level: MultiScalePatchLevel, samples: ContactSampleSet) -> dict[int, float]:
-        basis_by_patch = {basis.patch_id: basis for basis in level.load_bases}
+        basis_by_patch = self._basis_by_level[level.level_index]
         if self.config.use_overlap_weights:
             return _target_alpha_by_patch_weighted(samples, basis_by_patch, level.patch_level)
         return _target_alpha_by_patch(samples, basis_by_patch)

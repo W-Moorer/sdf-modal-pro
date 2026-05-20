@@ -1,7 +1,7 @@
 # Patch ILC Claim Gate
 
 Phase 9 gate passed: 1
-Claims passed: 7 / 7
+Claims passed: 8 / 8
 
 ## Ablation Set
 
@@ -18,10 +18,13 @@ Claims passed: 7 / 7
 - Claim 3 [PASS]: Patch residual modes recover local quasistatic response under contact loads. Metric static_completeness_and_residual_force_error=2.18033e-17;0 threshold < 1e-6; < 1e-8.
 - Claim 4 [PASS]: Patch-level ILC reduces the scale versus node-level ILC. Metric patch_alpha_dofs_vs_node_level_contact_dofs=40 < 69 threshold patch < node.
 - Claim 5 [PASS]: Active patch ILC alpha does not enter the main DAE state as the active contact set changes. Metric dae_dimension_independence_and_dynamic_dof_ratio=1;0.0769231 threshold 1; < 1.
-- Claim 6 [PASS]: Multi-scale overlapping patch activation handles moving contact over patch boundaries and improves the accuracy/efficiency balance. Metric force_jump_gap_jump_unique_requested_patches_multi_error_single_error_active_fraction_runtime_ratio=0.019911;0.00897824;8;0.269226;0.299569;0.240964;0.239992 threshold < 0.05; < 0.05; > 1; multi <= single; active/runtime < 0.35.
+- Claim 6 [PASS]: Multi-scale overlapping patch activation handles moving contact over patch boundaries, including a warped triangular surface case. Metric force_jump_gap_jump_unique_requested_patches_multi_error_single_error_active_fraction_runtime_ratio_complex_cases=0.019911;0.00897824;8;0.269226;0.299569;0.240964;0.239992;1 / 1 threshold < 0.05; < 0.05; > 1; multi <= single; active/runtime < 0.35; all complex surface cases pass.
 - Claim 7 [PASS]: Three-way FEM evidence shows the result is not only Python full-FEM/ROM self-consistency. Metric three_way_external_case_pass_count=2 / 2 threshold linear and nonlinear external FEM evidence cases pass.
+- Claim 8 [PASS]: The implementation now has measured performance evidence from cached SDF mapping and active patch evaluation. Metric performance_optimization_case_pass_count=2 / 2 threshold all performance optimization evidence cases pass.
 
 ## Evidence Tables
 
 - `sdf_patch_projection.csv`: SDF sample to active patch ILC mapping, force conservation, and zero dynamic-state contribution.
+- `complex_surface_moving_contact.csv`: warped triangular surface moving-contact validation.
+- `performance_optimization.csv`: cached SDF mapping and active patch performance evidence.
 - `three_way_external_fem.csv`: Python full FEM, adaptive ROM, and CalculiX external FEM comparison.

@@ -1,0 +1,25 @@
+{
+  "core_conclusion": "SDF-driven patch residual ILC preserves contact accuracy while concentrating moving-contact cost into a small active patch set.",
+  "archetype": "asymmetric mixed-modality figure batch",
+  "backend": "Python/matplotlib only",
+  "exports": [
+    "svg",
+    "pdf",
+    "tiff",
+    "png"
+  ],
+  "line_point_counts": {
+    "force_displacement": 26,
+    "moving_contact": 41,
+    "complex_projection_error": 35,
+    "sdf_kernel_scaling": 12,
+    "three_way_time_history": 80
+  },
+  "cloud_rendering": "continuous interpolated surface grids rendered with plot_surface and continuous colormaps; no bars or categorical clouds",
+  "qa": [
+    "SVG text remains editable through svg.fonttype=none.",
+    "No bar charts are used.",
+    "Every curve panel has at least ten parameter or time points.",
+    "Stress, strain and error panels are rendered as continuous three-dimensional surface maps."
+  ]
+}

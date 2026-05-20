@@ -30,6 +30,8 @@ class AdaptiveSimulationResult:
     steps: list[AdaptiveContactStep]
     final_displacement: np.ndarray
     final_velocity: np.ndarray
+    displacement_history: np.ndarray | None = None
+    velocity_history: np.ndarray | None = None
 
     @property
     def active_patch_history(self) -> list[tuple[int, ...]]:
@@ -81,7 +83,10 @@ class AdaptiveModalContactSimulator:
         basis = self._basis_for(active_patch_ids)
         q, qd = self._project_state(basis, u, v)
         qdd = np.zeros_like(q)
+        acceleration = np.zeros_like(u)
         history: list[AdaptiveContactStep] = []
+        displacement_history: list[np.ndarray] = []
+        velocity_history: list[np.ndarray] = []
         contact_work = 0.0
 
         for step_id in range(steps):
@@ -97,14 +102,16 @@ class AdaptiveModalContactSimulator:
                 damping=self.contact_damping,
             )
             active_patch_ids = self._activate(contact.contact_points)
+            acceleration = basis @ qdd
             basis = self._basis_for(active_patch_ids)
             q, qd = self._project_state(basis, u, v)
-            if qdd.size != q.size:
-                qdd = np.zeros_like(q)
+            qdd = self._project_vector(basis, acceleration)
 
             q, qd, qdd = self._newmark_step(basis, q, qd, qdd, contact.vector, dt)
             u = basis @ q
             v = basis @ qd
+            displacement_history.append(u.copy())
+            velocity_history.append(v.copy())
             contact_work += float(contact.vector @ (u - previous_u))
             kinetic = 0.5 * float(qd @ ((basis.T @ (self.fem.M @ basis)) @ qd))
             elastic = 0.5 * float(q @ ((basis.T @ (self.fem.K @ basis)) @ q))
@@ -123,7 +130,13 @@ class AdaptiveModalContactSimulator:
                 )
             )
 
-        return AdaptiveSimulationResult(history, u, v)
+        return AdaptiveSimulationResult(
+            history,
+            u,
+            v,
+            np.asarray(displacement_history),
+            np.asarray(velocity_history),
+        )
 
     def _basis_for(self, active_patch_ids: tuple[int, ...]) -> np.ndarray:
         columns = [self.base_basis]
@@ -154,6 +167,10 @@ class AdaptiveModalContactSimulator:
         q = la.solve(Mr, basis.T @ (self.fem.M @ displacement), assume_a="sym")
         qd = la.solve(Mr, basis.T @ (self.fem.M @ velocity), assume_a="sym")
         return q, qd
+
+    def _project_vector(self, basis: np.ndarray, vector: np.ndarray) -> np.ndarray:
+        Mr = basis.T @ (self.fem.M @ basis)
+        return la.solve(Mr, basis.T @ (self.fem.M @ vector), assume_a="sym")
 
     def _newmark_step(
         self,

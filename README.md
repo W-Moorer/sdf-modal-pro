@@ -71,3 +71,10 @@ online patch-mode activation, and force/gap/energy diagnostics.
 python examples/run_second_version.py
 python examples/visualize_second_version.py
 ```
+
+For an external-solver accuracy check, run a three-way comparison between
+Python full-order FEM, adaptive ROM, and WSL CalculiX direct full-order FEM:
+
+```powershell
+python examples/compare_three_way_dynamics.py
+```

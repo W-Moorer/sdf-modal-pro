@@ -119,7 +119,10 @@ a large full-order FEM time history. It combines exact patch static solves,
 compressed residual compliance checks, quasi-static indentation curves, moving
 contact smoothness, a small SFC full-FEM dynamic comparison, and a large-case
 performance proxy. The output includes CSV tables, a Markdown gate summary, and
-force-displacement / active-patch-history figures.
+force-displacement / active-patch-history figures. Small dynamic validation
+reports displacement and velocity RMSE, contact force peak and impulse errors,
+wall-time runtime ratio, and the solver-dimension speedup used for the
+prototype-independent Phase-8 gate.
 
 ```powershell
 python examples/run_phase8_validation_matrix.py

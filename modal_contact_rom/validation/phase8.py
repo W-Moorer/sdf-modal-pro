@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
@@ -11,6 +12,7 @@ from modal_contact_rom.contact_dynamics import (
     AdaptiveCalculixAlignedROMContactSimulator,
     CalculixAlignedFullFEMContactSimulator,
     PrescribedRigidPlane,
+    PrescribedRigidSphere,
     patch_mode_dict,
 )
 from modal_contact_rom.contact_modes import build_patch_normal_loads, solve_patch_contact_modes
@@ -50,9 +52,11 @@ class Phase8ValidationMatrix:
             and self.summary["quasi_static_residual_force_error"] < self.summary["quasi_static_low_mode_force_error"]
             and self.summary["moving_contact_force_jump"] < 5.0e-2
             and self.summary["moving_contact_gap_jump"] < 5.0e-2
+            and self.summary["moving_contact_energy_drift_excess_ratio"] <= 1.0
             and self.summary["small_dynamic_peak_force_error"] < 1.0e-1
             and self.summary["small_dynamic_impulse_error"] < 1.0e-1
-            and self.summary["small_dynamic_estimated_runtime_speedup"] > 5.0
+            and self.summary["small_dynamic_solver_dimension_speedup"] > 5.0
+            and self.summary["quasi_static_residual_dynamic_dof_ratio_vs_ordinary"] < 1.0
             and self.summary["large_active_patch_fraction"] < 0.35
             and self.summary["large_dae_dimension_is_contact_independent"] == 1
         )
@@ -207,6 +211,12 @@ def _quasi_static_indentation_validation(static_case: _StaticCase) -> tuple[list
         ),
         "quasi_static_residual_force_error": float(np.mean(force_errors_by_model["low_modes_plus_patch_residual_ilc"])),
         "quasi_static_residual_dynamic_dofs": float(static_case.low_modes.shape[1]),
+        "quasi_static_ordinary_patch_static_dynamic_dofs": float(
+            static_case.low_modes.shape[1] + residual_basis.alpha_dimension
+        ),
+        "quasi_static_residual_dynamic_dof_ratio_vs_ordinary": float(
+            static_case.low_modes.shape[1] / (static_case.low_modes.shape[1] + residual_basis.alpha_dimension)
+        ),
     }
 
 
@@ -243,6 +253,7 @@ def _moving_contact_validation(moving_steps: int) -> tuple[list[Phase8Row], list
         dtype=float,
     )
     gap_jump = _max_relative_jump(gaps)
+    energy = _moving_sphere_energy_drift_validation()
     history_rows = []
     for step, gap in zip(result.steps, gaps):
         history_rows.append(
@@ -268,13 +279,18 @@ def _moving_contact_validation(moving_steps: int) -> tuple[list[Phase8Row], list
             "mean_runtime_ratio": result.mean_runtime_ratio,
             "mean_projection_error": result.mean_projection_error,
             "mean_coarse_projection_error": result.mean_coarse_projection_error,
-            "energy_drift_excess_proxy": 0.0,
+            "adaptive_energy_drift": energy["adaptive_energy_drift"],
+            "baseline_energy_drift": energy["baseline_energy_drift"],
+            "energy_drift_excess_ratio": energy["energy_drift_excess_ratio"],
         }
     ]
     return history_rows[:0] + rows, history_rows, {
         "moving_contact_force_jump": float(result.max_force_jump),
         "moving_contact_alpha_jump": float(result.max_alpha_jump),
         "moving_contact_gap_jump": float(gap_jump),
+        "moving_contact_adaptive_energy_drift": float(energy["adaptive_energy_drift"]),
+        "moving_contact_baseline_energy_drift": float(energy["baseline_energy_drift"]),
+        "moving_contact_energy_drift_excess_ratio": float(energy["energy_drift_excess_ratio"]),
         "moving_contact_mean_runtime_ratio": float(result.mean_runtime_ratio),
         "moving_contact_mean_projection_error": float(result.mean_projection_error),
         "moving_contact_mean_coarse_projection_error": float(result.mean_coarse_projection_error),
@@ -303,12 +319,14 @@ def _small_dynamic_validation(dynamic_steps: int) -> tuple[list[Phase8Row], dict
     plane = PrescribedRigidPlane(point=np.array([0.0, 0.0, 0.525]), normal=np.array([0.0, 0.0, 1.0]))
     external = lambda time: force * min(max(time / 0.08, 0.0), 1.0)
     dt = 0.000625
+    full_start = time.perf_counter()
     full = CalculixAlignedFullFEMContactSimulator(
         fem=fem,
         rigid_plane=plane,
         contact_stiffness=500.0,
         external_force=external,
     ).run(dt=dt, steps=dynamic_steps)
+    full_wall_time = time.perf_counter() - full_start
     contact_modes = solve_patch_contact_modes(fem.K, build_patch_normal_loads(fem.mesh, surface, patches), fem.free_dofs)
     low = compute_low_modes(fem.K, fem.M, fem.free_dofs, num_modes=6)
     interface_nodes = np.flatnonzero(np.isclose(fem.mesh.nodes[:, 0], fem.mesh.nodes[:, 0].max()))
@@ -320,6 +338,7 @@ def _small_dynamic_validation(dynamic_steps: int) -> tuple[list[Phase8Row], dict
         num_fixed_interface_modes=4,
     )
     base_basis = mass_orthonormalize(fem.M, np.column_stack((cb.basis, low.modes)))
+    rom_start = time.perf_counter()
     rom = AdaptiveCalculixAlignedROMContactSimulator(
         fem=fem,
         surface=surface,
@@ -333,6 +352,7 @@ def _small_dynamic_validation(dynamic_steps: int) -> tuple[list[Phase8Row], dict
         residual_activation_count=max(int(contact_modes.patch_ids.size) - 1, 0),
         max_activation_iterations=max(4, int(contact_modes.patch_ids.size) + 1),
     ).run(dt=dt, steps=dynamic_steps)
+    rom_wall_time = time.perf_counter() - rom_start
     accuracy = compare_dynamic_results(full, rom)
     full_force = np.asarray([step.normal_force for step in full.steps], dtype=float)
     rom_force = np.asarray([step.normal_force for step in rom.steps], dtype=float)
@@ -341,27 +361,44 @@ def _small_dynamic_validation(dynamic_steps: int) -> tuple[list[Phase8Row], dict
     rom_impulse = float(np.trapezoid(rom_force, dx=dt))
     impulse_error = abs(rom_impulse - full_impulse) / max(abs(full_impulse), 1.0e-30)
     max_basis = int(max(rom.basis_size_history))
-    estimated_speedup = (float(fem.free_dofs.size) / max(float(max_basis), 1.0)) ** 3
+    solver_dimension_speedup = (float(fem.free_dofs.size) / max(float(max_basis), 1.0)) ** 3
+    measured_wall_speedup = full_wall_time / max(rom_wall_time, 1.0e-30)
+    displacement_rmse = _rmse(full.displacement_history, rom.displacement_history)
+    velocity_rmse = _rmse(full.velocity_history, rom.velocity_history)
     row = {
         "case": "small_sfc_full_fem_vs_adaptive_rom",
         "steps": dynamic_steps,
         "full_free_dofs": int(fem.free_dofs.size),
         "rom_base_dimension": int(base_basis.shape[1]),
         "rom_max_basis_dimension": max_basis,
+        "displacement_rmse": displacement_rmse,
+        "velocity_rmse": velocity_rmse,
+        "normalized_displacement_rmse": displacement_rmse / max(_rms(full.displacement_history), 1.0e-30),
+        "normalized_velocity_rmse": velocity_rmse / max(_rms(full.velocity_history), 1.0e-30),
         "relative_displacement_l2": accuracy.relative_displacement_l2,
         "final_relative_displacement_l2": accuracy.final_relative_displacement_l2,
         "relative_velocity_l2": accuracy.relative_velocity_l2,
         "contact_force_peak_error": peak_error,
         "contact_impulse_error": impulse_error,
-        "estimated_runtime_speedup": estimated_speedup,
+        "full_wall_time_seconds": full_wall_time,
+        "rom_wall_time_seconds": rom_wall_time,
+        "measured_wall_runtime_ratio": rom_wall_time / max(full_wall_time, 1.0e-30),
+        "measured_wall_speedup": measured_wall_speedup,
+        "solver_dimension_speedup": solver_dimension_speedup,
         "max_energy_balance_error_difference": accuracy.max_energy_balance_error_difference,
     }
     return [row], {
+        "small_dynamic_displacement_rmse": float(displacement_rmse),
+        "small_dynamic_velocity_rmse": float(velocity_rmse),
         "small_dynamic_relative_displacement_l2": float(accuracy.relative_displacement_l2),
         "small_dynamic_relative_velocity_l2": float(accuracy.relative_velocity_l2),
         "small_dynamic_peak_force_error": float(peak_error),
         "small_dynamic_impulse_error": float(impulse_error),
-        "small_dynamic_estimated_runtime_speedup": float(estimated_speedup),
+        "small_dynamic_full_wall_time_seconds": float(full_wall_time),
+        "small_dynamic_rom_wall_time_seconds": float(rom_wall_time),
+        "small_dynamic_measured_wall_runtime_ratio": float(rom_wall_time / max(full_wall_time, 1.0e-30)),
+        "small_dynamic_measured_wall_speedup": float(measured_wall_speedup),
+        "small_dynamic_solver_dimension_speedup": float(solver_dimension_speedup),
     }
 
 
@@ -407,6 +444,22 @@ def _large_performance_validation() -> tuple[list[Phase8Row], dict[str, float | 
             "surface_nodes": total_surface_nodes,
             "runtime_proxy": float(dynamic_dofs**3),
             "memory_proxy": float(fem.mesh.n_dofs * dynamic_dofs),
+            "runtime_growth_driver": "dynamic_dofs",
+            "memory_growth_driver": "dynamic_dofs",
+            "dae_dimension_depends_on_contact_nodes": 0,
+        },
+        {
+            "strategy": "patch_residual_ilc",
+            "dynamic_dofs": dynamic_dofs,
+            "ilc_or_contact_dofs": int(result.total_patch_count),
+            "active_patch_count": int(result.total_patch_count),
+            "total_patch_count": result.total_patch_count,
+            "active_contact_nodes": active_contact_nodes,
+            "surface_nodes": total_surface_nodes,
+            "runtime_proxy": float(dynamic_dofs**3 + result.total_patch_count**2),
+            "memory_proxy": float(fem.mesh.n_dofs * dynamic_dofs + fem.mesh.n_dofs * result.total_patch_count),
+            "runtime_growth_driver": "stored_patch_blocks",
+            "memory_growth_driver": "stored_residual_blocks",
             "dae_dimension_depends_on_contact_nodes": 0,
         },
         {
@@ -419,6 +472,8 @@ def _large_performance_validation() -> tuple[list[Phase8Row], dict[str, float | 
             "surface_nodes": total_surface_nodes,
             "runtime_proxy": float(dynamic_dofs**3 + (3 * active_contact_nodes) ** 2),
             "memory_proxy": float(fem.mesh.n_dofs * dynamic_dofs + fem.mesh.n_dofs * 3 * active_contact_nodes),
+            "runtime_growth_driver": "active_contact_nodes",
+            "memory_growth_driver": "active_contact_nodes",
             "dae_dimension_depends_on_contact_nodes": 1,
         },
         {
@@ -431,6 +486,8 @@ def _large_performance_validation() -> tuple[list[Phase8Row], dict[str, float | 
             "surface_nodes": total_surface_nodes,
             "runtime_proxy": float(dynamic_dofs**3 + 1),
             "memory_proxy": float(fem.mesh.n_dofs * dynamic_dofs + fem.mesh.n_dofs),
+            "runtime_growth_driver": "active_patches",
+            "memory_growth_driver": "stored_residual_blocks",
             "dae_dimension_depends_on_contact_nodes": 0,
         },
         {
@@ -443,6 +500,8 @@ def _large_performance_validation() -> tuple[list[Phase8Row], dict[str, float | 
             "surface_nodes": total_surface_nodes,
             "runtime_proxy": float(dynamic_dofs**3 + result.max_active_patch_count**2),
             "memory_proxy": float(fem.mesh.n_dofs * dynamic_dofs + fem.mesh.n_dofs * result.total_patch_count),
+            "runtime_growth_driver": "active_patches",
+            "memory_growth_driver": "stored_residual_blocks",
             "dae_dimension_depends_on_contact_nodes": 0,
         },
     ]
@@ -473,6 +532,77 @@ def _compressed_residual_compliance_errors(residual_basis: Any, target_max_error
     if best_error is None:
         best_error = np.zeros(residual_basis.alpha_dimension, dtype=float)
     return best_rank, best_error
+
+
+def _moving_sphere_energy_drift_validation() -> dict[str, float]:
+    fem = cantilever_block(nx=4, ny=2, nz=2, stiffness_scale=100.0)
+    surface = extract_surface(fem.mesh)
+    patches = partition_surface_patches(surface, bins=(2, 2))
+    loads = build_patch_normal_loads(fem.mesh, surface, patches)
+    contact = solve_patch_contact_modes(fem.K, loads, fem.free_dofs)
+    low = compute_low_modes(fem.K, fem.M, fem.free_dofs, num_modes=6)
+    interface_nodes = np.flatnonzero(np.isclose(fem.mesh.nodes[:, 0], fem.mesh.nodes[:, 0].max()))
+    cb = compute_craig_bampton_basis(
+        fem.K,
+        fem.M,
+        fem.free_dofs,
+        fem.mesh.dof_indices(interface_nodes),
+        num_fixed_interface_modes=4,
+    )
+    base_basis = mass_orthonormalize(fem.M, np.column_stack((cb.basis, low.modes)))
+    mode_by_patch = patch_mode_dict(contact.patch_ids, contact.modes)
+    x_max = float(fem.mesh.nodes[:, 0].max())
+    y_min = float(fem.mesh.nodes[:, 1].min())
+    y_max = float(fem.mesh.nodes[:, 1].max())
+    z_mid = float(np.mean(fem.mesh.nodes[:, 2]))
+    radius = 1.25
+    penetration = 0.035
+    duration = 0.6
+    y_start = y_min + 0.25
+    y_stop = y_max - 0.25
+    speed = (y_stop - y_start) / duration
+    center = lambda time_value: np.array(
+        [
+            x_max + radius - penetration,
+            y_start + (y_stop - y_start) * min(max(time_value / duration, 0.0), 1.0),
+            z_mid,
+        ]
+    )
+    velocity = lambda time_value: np.array([0.0, speed if 0.0 <= time_value <= duration else 0.0, 0.0])
+    common = {
+        "fem": fem,
+        "surface": surface,
+        "patches": patches,
+        "base_basis": base_basis,
+        "patch_modes": mode_by_patch,
+        "rigid_sphere": PrescribedRigidSphere(radius=radius, center=center, velocity=velocity),
+        "penalty": 180.0,
+        "contact_damping": 0.5,
+        "rayleigh_alpha": 0.05,
+        "rayleigh_beta": 0.002,
+    }
+    adaptive_result = _run_adaptive_modal_energy_case(common, activation_count=2)
+    baseline_result = _run_adaptive_modal_energy_case(common, activation_count=len(patches))
+    adaptive_drift = _max_abs_energy_balance_error(adaptive_result.steps)
+    baseline_drift = _max_abs_energy_balance_error(baseline_result.steps)
+    return {
+        "adaptive_energy_drift": adaptive_drift,
+        "baseline_energy_drift": baseline_drift,
+        "energy_drift_excess_ratio": adaptive_drift / max(baseline_drift, 1.0e-30),
+    }
+
+
+def _run_adaptive_modal_energy_case(common: dict[str, Any], activation_count: int):
+    from modal_contact_rom.contact_dynamics import AdaptiveModalContactSimulator
+
+    return AdaptiveModalContactSimulator(
+        activation_count=activation_count,
+        **common,
+    ).run(dt=0.01, steps=60)
+
+
+def _max_abs_energy_balance_error(steps: list[Any]) -> float:
+    return float(max(abs(step.energy_balance_error) for step in steps))
 
 
 def _sliding_frames(surface: Any, steps: int) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -529,9 +659,13 @@ def _write_phase8_summary(path: Path, result: Phase8ValidationMatrix) -> None:
         f"Quasi-static residual ILC force error: {result.summary['quasi_static_residual_force_error']:.6g}\n",
         f"Moving contact force jump: {result.summary['moving_contact_force_jump']:.6g}\n",
         f"Moving contact gap jump: {result.summary['moving_contact_gap_jump']:.6g}\n",
+        f"Moving contact energy drift excess ratio: {result.summary['moving_contact_energy_drift_excess_ratio']:.6g}\n",
+        f"Small dynamic displacement RMSE: {result.summary['small_dynamic_displacement_rmse']:.6g}\n",
+        f"Small dynamic velocity RMSE: {result.summary['small_dynamic_velocity_rmse']:.6g}\n",
         f"Small dynamic peak force error: {result.summary['small_dynamic_peak_force_error']:.6g}\n",
         f"Small dynamic impulse error: {result.summary['small_dynamic_impulse_error']:.6g}\n",
-        f"Small dynamic estimated runtime speedup: {result.summary['small_dynamic_estimated_runtime_speedup']:.6g}\n",
+        f"Small dynamic measured wall runtime ratio: {result.summary['small_dynamic_measured_wall_runtime_ratio']:.6g}\n",
+        f"Small dynamic solver-dimension speedup: {result.summary['small_dynamic_solver_dimension_speedup']:.6g}\n",
         f"Large active patch fraction: {result.summary['large_active_patch_fraction']:.6g}\n",
         f"Large active/full runtime ratio: {result.summary['large_runtime_ratio_active_vs_full_patch']:.6g}\n",
     ]
@@ -578,6 +712,14 @@ def _write_phase8_figures(result: Phase8ValidationMatrix, figures: Path) -> None
 
 def _relative_l2(reference: np.ndarray, candidate: np.ndarray) -> float:
     return float(np.linalg.norm(reference - candidate) / max(float(np.linalg.norm(reference)), 1.0e-30))
+
+
+def _rmse(reference: np.ndarray, candidate: np.ndarray) -> float:
+    return float(np.sqrt(np.mean((np.asarray(reference, dtype=float) - np.asarray(candidate, dtype=float)) ** 2)))
+
+
+def _rms(values: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(np.asarray(values, dtype=float) ** 2)))
 
 
 def _max_relative_jump(values: np.ndarray) -> float:

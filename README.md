@@ -60,3 +60,14 @@ then feeds the CalculiX K/M matrices into the same patch-ROM validation chain.
 ```powershell
 python examples/run_calculix_matrix_storage.py
 ```
+
+## Second Version Dynamics
+
+The second-version prototype adds a Craig-Bampton connection basis, modal
+coordinate time integration, rigid-sphere contact, contact-force projection,
+online patch-mode activation, and force/gap/energy diagnostics.
+
+```powershell
+python examples/run_second_version.py
+python examples/visualize_second_version.py
+```

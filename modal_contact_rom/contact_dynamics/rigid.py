@@ -128,3 +128,94 @@ class PrescribedRigidSphere:
             contact_node_ids=evaluation.contact_node_ids,
             contact_points=evaluation.contact_points,
         )
+
+
+class PrescribedRigidPlane:
+    """Rigid plane with penalty response on the positive-normal side."""
+
+    def __init__(
+        self,
+        point: np.ndarray,
+        normal: np.ndarray,
+        velocity: np.ndarray | Callable[[float], np.ndarray] | None = None,
+    ) -> None:
+        self.point = np.asarray(point, dtype=float)
+        normal = np.asarray(normal, dtype=float)
+        normal_norm = float(np.linalg.norm(normal))
+        if normal_norm <= 0.0:
+            raise ValueError("normal must be nonzero")
+        self.normal = normal / normal_norm
+        self._velocity = velocity
+
+    def velocity(self, time: float) -> np.ndarray:
+        if callable(self._velocity):
+            return np.asarray(self._velocity(time), dtype=float)
+        if self._velocity is not None:
+            return np.asarray(self._velocity, dtype=float)
+        return np.zeros(3, dtype=float)
+
+    def evaluate(self, mesh: Mesh, surface: SurfaceMesh, displacement: np.ndarray, time: float) -> ContactEvaluation:
+        del time
+        surface_nodes = np.unique(surface.triangles.reshape(-1))
+        current = mesh.nodes[surface_nodes] + displacement.reshape(-1, 3)[surface_nodes]
+        signed = (current - self.point) @ self.normal
+        gaps = -signed
+        contact_mask = signed > 0.0
+        normals = np.repeat((-self.normal)[None, :], surface_nodes.size, axis=0)
+        return ContactEvaluation(
+            gaps=gaps,
+            normals=normals,
+            contact_node_ids=surface_nodes[contact_mask],
+            contact_points=current[contact_mask],
+            min_gap=float(np.min(gaps)) if gaps.size else float("inf"),
+        )
+
+    def contact_force(
+        self,
+        mesh: Mesh,
+        surface: SurfaceMesh,
+        displacement: np.ndarray,
+        velocity: np.ndarray,
+        time: float,
+        penalty: float,
+        damping: float = 0.0,
+    ) -> SurfaceContactForce:
+        evaluation = self.evaluate(mesh, surface, displacement, time)
+        vector = np.zeros(mesh.n_dofs, dtype=float)
+        resultant = np.zeros(3, dtype=float)
+        if evaluation.contact_node_ids.size == 0:
+            return SurfaceContactForce(
+                vector,
+                resultant,
+                normal_force=0.0,
+                max_penetration=0.0,
+                contact_node_ids=evaluation.contact_node_ids,
+                contact_points=evaluation.contact_points,
+            )
+
+        plane_velocity = self.velocity(time)
+        nodal_velocity = velocity.reshape(-1, 3)
+        normal_force = 0.0
+        max_penetration = 0.0
+        for node_id, point in zip(evaluation.contact_node_ids, evaluation.contact_points):
+            signed = float((point - self.point) @ self.normal)
+            penetration = max(signed, 0.0)
+            force_normal = -self.normal
+            relative_normal_speed = float(np.dot(nodal_velocity[int(node_id)] - plane_velocity, force_normal))
+            force_magnitude = penalty * penetration - damping * min(relative_normal_speed, 0.0)
+            force_magnitude = max(force_magnitude, 0.0)
+            force = force_magnitude * force_normal
+            start = 3 * int(node_id)
+            vector[start : start + 3] += force
+            resultant += force
+            normal_force += force_magnitude
+            max_penetration = max(max_penetration, penetration)
+
+        return SurfaceContactForce(
+            vector,
+            resultant,
+            normal_force=float(normal_force),
+            max_penetration=float(max_penetration),
+            contact_node_ids=evaluation.contact_node_ids,
+            contact_points=evaluation.contact_points,
+        )

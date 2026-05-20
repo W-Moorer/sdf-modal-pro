@@ -11,6 +11,7 @@ from modal_contact_rom.fem_io.calculix import (
     run_ccx_wsl,
     write_cantilever_matrix_storage_input,
     write_cantilever_dynamic_cload_input,
+    write_cantilever_plane_contact_dynamic_input,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "run_ccx_wsl",
     "write_cantilever_matrix_storage_input",
     "write_cantilever_dynamic_cload_input",
+    "write_cantilever_plane_contact_dynamic_input",
 ]

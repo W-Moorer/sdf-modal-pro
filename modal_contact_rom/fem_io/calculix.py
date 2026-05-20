@@ -174,6 +174,152 @@ def write_cantilever_dynamic_cload_input(
     return path
 
 
+def write_cantilever_plane_contact_dynamic_input(
+    path: str | Path,
+    mesh: Mesh,
+    fixed_nodes: np.ndarray,
+    top_nodes: np.ndarray,
+    cload: np.ndarray,
+    plane_z: float,
+    time_step: float,
+    total_time: float,
+    contact_stiffness: float,
+    young_modulus: float = 1000.0,
+    poisson_ratio: float = 0.3,
+    density: float = 1.0,
+    wall_thickness: float = 0.1,
+    wall_stiffness: float = 1.0e9,
+    max_increments: int | None = None,
+    load_ramp_time: float | None = None,
+    direct: bool = True,
+) -> Path:
+    """Write a CalculiX nonlinear contact job against a fixed rigid-like plane."""
+
+    if mesh.element_type != "hex8":
+        raise ValueError("CalculiX writer currently expects a hex8 mesh")
+    if time_step <= 0.0 or total_time <= 0.0:
+        raise ValueError("time_step and total_time must be positive")
+    if contact_stiffness <= 0.0:
+        raise ValueError("contact_stiffness must be positive")
+    if load_ramp_time is not None and (load_ramp_time <= 0.0 or load_ramp_time > total_time):
+        raise ValueError("load_ramp_time must be positive and no larger than total_time")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fixed_nodes = np.asarray(fixed_nodes, dtype=np.int64)
+    top_nodes = np.asarray(top_nodes, dtype=np.int64)
+    cload = np.asarray(cload, dtype=float)
+    if cload.shape != (mesh.n_dofs,):
+        raise ValueError(f"cload must have shape ({mesh.n_dofs},)")
+    if max_increments is None:
+        max_increments = int(np.ceil(total_time / time_step)) + 10
+
+    mins = np.min(mesh.nodes, axis=0)
+    maxs = np.max(mesh.nodes, axis=0)
+    wall_nodes = np.asarray(
+        [
+            [mins[0], mins[1], plane_z],
+            [maxs[0], mins[1], plane_z],
+            [maxs[0], maxs[1], plane_z],
+            [mins[0], maxs[1], plane_z],
+            [mins[0], mins[1], plane_z + wall_thickness],
+            [maxs[0], mins[1], plane_z + wall_thickness],
+            [maxs[0], maxs[1], plane_z + wall_thickness],
+            [mins[0], maxs[1], plane_z + wall_thickness],
+        ],
+        dtype=float,
+    )
+    wall_start = mesh.n_nodes
+
+    lines: list[str] = [
+        "*HEADING",
+        "Modal contact ROM CalculiX nonlinear plane-contact benchmark",
+        "*NODE, NSET=NALL",
+    ]
+    for idx, xyz in enumerate(mesh.nodes, start=1):
+        lines.append(f"{idx}, {xyz[0]:.16g}, {xyz[1]:.16g}, {xyz[2]:.16g}")
+    for idx, xyz in enumerate(wall_nodes, start=wall_start + 1):
+        lines.append(f"{idx}, {xyz[0]:.16g}, {xyz[1]:.16g}, {xyz[2]:.16g}")
+
+    lines.append("*ELEMENT, TYPE=C3D8, ELSET=EFLEX")
+    for elem_id, element in enumerate(mesh.elements, start=1):
+        ccx_nodes = ", ".join(str(int(node_id) + 1) for node_id in element)
+        lines.append(f"{elem_id}, {ccx_nodes}")
+    lines.append("*ELEMENT, TYPE=C3D8, ELSET=EWALL")
+    wall_element_id = mesh.elements.shape[0] + 1
+    lines.append(f"{wall_element_id}, " + ", ".join(str(wall_start + i + 1) for i in range(8)))
+
+    lines.append("*NSET, NSET=FIXED")
+    lines.extend(_wrap_csv([str(int(node_id) + 1) for node_id in fixed_nodes]))
+    lines.append("*NSET, NSET=TOP")
+    lines.extend(_wrap_csv([str(int(node_id) + 1) for node_id in top_nodes]))
+    lines.append("*NSET, NSET=OBS")
+    lines.extend(_wrap_csv([str(int(node_id) + 1) for node_id in top_nodes]))
+    lines.append("*NSET, NSET=WALL")
+    lines.extend(_wrap_csv([str(wall_start + i + 1) for i in range(8)]))
+    lines.extend(
+        [
+            "*MATERIAL, NAME=FLEX_MAT",
+            "*ELASTIC",
+            f"{young_modulus:.16g}, {poisson_ratio:.16g}",
+            "*DENSITY",
+            f"{density:.16g}",
+            "*MATERIAL, NAME=WALL_MAT",
+            "*ELASTIC",
+            f"{wall_stiffness:.16g}, {poisson_ratio:.16g}",
+            "*DENSITY",
+            f"{density:.16g}",
+            "*SOLID SECTION, ELSET=EFLEX, MATERIAL=FLEX_MAT",
+            "*SOLID SECTION, ELSET=EWALL, MATERIAL=WALL_MAT",
+            "*BOUNDARY",
+            "FIXED, 1, 3",
+            "WALL, 1, 3",
+            "*SURFACE, NAME=MASTER",
+            "EWALL, S1",
+            "*SURFACE, NAME=SLAVE, TYPE=NODE",
+            "TOP",
+            "*CONTACT PAIR, INTERACTION=SI1, TYPE=NODE TO SURFACE",
+            "SLAVE, MASTER",
+            "*SURFACE INTERACTION, NAME=SI1",
+            "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR",
+            f"{contact_stiffness:.16g}, 3.",
+        ]
+    )
+    if load_ramp_time is not None:
+        lines.extend(
+            [
+                "*AMPLITUDE, NAME=LOAD_RAMP",
+                "0., 0.",
+                f"{load_ramp_time:.16g}, 1.",
+                f"{total_time:.16g}, 1.",
+            ]
+        )
+    lines.extend(
+        [
+            f"*STEP, NLGEOM, INC={max_increments}",
+            "*DYNAMIC, DIRECT" if direct else "*DYNAMIC",
+            f"{time_step:.16g}, {total_time:.16g}",
+            "*CLOAD, AMPLITUDE=LOAD_RAMP" if load_ramp_time is not None else "*CLOAD",
+        ]
+    )
+    for dof, value in enumerate(cload):
+        if abs(value) <= 1.0e-14:
+            continue
+        node_id = dof // 3
+        component = dof % 3
+        lines.append(f"{node_id + 1}, {component + 1}, {value:.16g}")
+    lines.extend(
+        [
+            "*NODE PRINT, NSET=OBS, FREQUENCY=1",
+            "U",
+            "*CONTACT PRINT, NSET=TOP, FREQUENCY=1",
+            "CDIS, CSTR",
+            "*END STEP",
+        ]
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def run_ccx_wsl(
     job_name: str,
     workdir: str | Path,
@@ -250,16 +396,22 @@ def read_node_print_displacements(path: str | Path) -> CalculixNodeHistory:
 
     text = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
     header = re.compile(r"displacements .* time\s+([+-]?\d+(?:\.\d*)?(?:[Ee][+-]?\d+)?)", re.IGNORECASE)
+    non_displacement_header = re.compile(r"(relative contact displacement|contact stress)", re.IGNORECASE)
     times: list[float] = []
     displacements: dict[int, list[np.ndarray]] = {}
     current_time: float | None = None
+    in_displacement_block = False
     for line in text:
         match = header.search(line)
         if match:
             current_time = float(match.group(1).replace("D", "E"))
             times.append(current_time)
+            in_displacement_block = True
             continue
-        if current_time is None:
+        if non_displacement_header.search(line):
+            in_displacement_block = False
+            continue
+        if current_time is None or not in_displacement_block:
             continue
         parts = line.split()
         if len(parts) != 4:

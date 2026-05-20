@@ -1,5 +1,6 @@
 from modal_contact_rom.contact_dynamics.rigid import (
     ContactEvaluation,
+    PrescribedRigidPlane,
     PrescribedRigidSphere,
     SurfaceContactForce,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "ForcedLinearResult",
     "ForcedLinearStep",
     "PrescribedRigidSphere",
+    "PrescribedRigidPlane",
     "SurfaceContactForce",
     "patch_mode_dict",
     "run_full_forced_response",

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import scipy.linalg as la
 
-from modal_contact_rom.contact_dynamics.rigid import PrescribedRigidSphere
+from modal_contact_rom.contact_dynamics.rigid import PrescribedRigidPlane, PrescribedRigidSphere
 from modal_contact_rom.fem_io.generate import FEMSystem
 from modal_contact_rom.surface_patch.extract import SurfaceMesh
 
@@ -19,6 +20,7 @@ class FullFEMContactStep:
     kinetic_energy: float
     elastic_energy: float
     contact_work: float
+    external_work: float
     energy_balance_error: float
 
 
@@ -38,11 +40,12 @@ class FullFEMContactSimulator:
         self,
         fem: FEMSystem,
         surface: SurfaceMesh,
-        rigid_sphere: PrescribedRigidSphere,
+        rigid_sphere: PrescribedRigidSphere | PrescribedRigidPlane,
         penalty: float,
         contact_damping: float = 0.0,
         rayleigh_alpha: float = 0.0,
         rayleigh_beta: float = 0.0,
+        external_force: np.ndarray | Callable[[float], np.ndarray] | None = None,
     ) -> None:
         self.fem = fem
         self.surface = surface
@@ -51,6 +54,12 @@ class FullFEMContactSimulator:
         self.contact_damping = float(contact_damping)
         self.rayleigh_alpha = float(rayleigh_alpha)
         self.rayleigh_beta = float(rayleigh_beta)
+        self.external_force = external_force
+        if external_force is not None and not callable(external_force):
+            external_force_array = np.asarray(external_force, dtype=float)
+            if external_force_array.shape != (fem.mesh.n_dofs,):
+                raise ValueError(f"external_force must have shape ({fem.mesh.n_dofs},)")
+            self.external_force = external_force_array
 
     def run(self, dt: float, steps: int) -> FullFEMSimulationResult:
         if dt <= 0.0:
@@ -72,9 +81,12 @@ class FullFEMContactSimulator:
         displacement_history: list[np.ndarray] = []
         velocity_history: list[np.ndarray] = []
         contact_work = 0.0
+        external_work = 0.0
+        previous_external_force = self._external_force(0.0)
 
         for step_id in range(steps):
             time = step_id * dt
+            load_time = time + dt
             previous_u = u.copy()
             contact = self.rigid_sphere.contact_force(
                 self.fem.mesh,
@@ -85,14 +97,19 @@ class FullFEMContactSimulator:
                 penalty=self.penalty,
                 damping=self.contact_damping,
             )
-            q, qd, qdd = _newmark_step(Mff, Kff, Cff, q, qd, qdd, contact.vector[free], dt)
+            current_external_force = self._external_force(load_time)
+            total_force = contact.vector + current_external_force
+            q, qd, qdd = _newmark_step(Mff, Kff, Cff, q, qd, qdd, total_force[free], dt)
             u = np.zeros(self.fem.mesh.n_dofs, dtype=float)
             v = np.zeros_like(u)
             u[free] = q
             v[free] = qd
             displacement_history.append(u.copy())
             velocity_history.append(v.copy())
-            contact_work += float(contact.vector @ (u - previous_u))
+            displacement_increment = u - previous_u
+            contact_work += float(contact.vector @ displacement_increment)
+            external_work += float(0.5 * (previous_external_force + current_external_force) @ displacement_increment)
+            previous_external_force = current_external_force
             kinetic = 0.5 * float(qd @ (Mff @ qd))
             elastic = 0.5 * float(q @ (Kff @ q))
             mechanical = kinetic + elastic
@@ -105,7 +122,8 @@ class FullFEMContactSimulator:
                     kinetic_energy=kinetic,
                     elastic_energy=elastic,
                     contact_work=contact_work,
-                    energy_balance_error=mechanical - contact_work,
+                    external_work=external_work,
+                    energy_balance_error=mechanical - contact_work - external_work,
                 )
             )
 
@@ -116,6 +134,17 @@ class FullFEMContactSimulator:
             np.asarray(displacement_history),
             np.asarray(velocity_history),
         )
+
+    def _external_force(self, time: float) -> np.ndarray:
+        if self.external_force is None:
+            return np.zeros(self.fem.mesh.n_dofs, dtype=float)
+        if callable(self.external_force):
+            force = np.asarray(self.external_force(time), dtype=float)
+        else:
+            force = np.asarray(self.external_force, dtype=float)
+        if force.shape != (self.fem.mesh.n_dofs,):
+            raise ValueError(f"external_force must have shape ({self.fem.mesh.n_dofs},)")
+        return force
 
 
 def _newmark_step(

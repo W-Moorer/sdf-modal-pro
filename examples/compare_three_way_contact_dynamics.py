@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 
 from modal_contact_rom.contact_dynamics import (
     AdaptiveModalContactSimulator,
-    FullFEMContactSimulator,
+    CalculixAlignedFullFEMContactSimulator,
     PrescribedRigidPlane,
     patch_mode_dict,
 )
@@ -62,8 +62,8 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
     calculix_contact_stiffness = 500.0
     upward_force_per_free_top_node = 1.35
     load_ramp_time = 0.08
-    rayleigh_alpha = 0.02
-    rayleigh_beta = 0.0005
+    rayleigh_alpha = 0.0
+    rayleigh_beta = 0.0
 
     seed = cantilever_block(nx=2, ny=1, nz=1, length=2.0, width=1.0, height=1.0)
     write_cantilever_matrix_storage_input(
@@ -102,6 +102,7 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         max_increments=steps + 20,
         load_ramp_time=load_ramp_time,
         direct=True,
+        contact_type="surface_to_surface",
     )
     run_ccx_wsl(contact_job, workdir, timeout=180)
     calculix_history = read_node_print_displacements(workdir / f"{contact_job}.dat")
@@ -114,20 +115,16 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
     )
     nodal_contact_areas = rigid_plane.nodal_area_scales(fem.mesh, surface)
     external_force = lambda time: cload * min(max(time / load_ramp_time, 0.0), 1.0)
-    python_contact_penalty, python_contact_damping, full_vs_calculix, full, calibration_trials = (
-        calibrate_full_order_contact_against_calculix(
-            fem=fem,
-            surface=surface,
-            plane_z=plane_z,
-            external_force=external_force,
-            calculix_history=calculix_history,
-            observed_nodes=top_nodes,
-            dt=dt,
-            steps=steps,
-            rayleigh_alpha=rayleigh_alpha,
-            rayleigh_beta=rayleigh_beta,
-        )
-    )
+    python_contact_penalty = calculix_contact_stiffness
+    python_contact_damping = 0.0
+    full = CalculixAlignedFullFEMContactSimulator(
+        fem=fem,
+        rigid_plane=rigid_plane,
+        contact_stiffness=python_contact_penalty,
+        external_force=external_force,
+        hht_alpha=0.0,
+    ).run(dt=dt, steps=steps)
+    full_vs_calculix = compare_to_calculix_observed_displacements_at_times(full, dt, calculix_history, top_nodes)
 
     contact_modes = solve_patch_contact_modes(fem.K, build_patch_normal_loads(fem.mesh, surface, patches), fem.free_dofs)
     low = compute_low_modes(fem.K, fem.M, fem.free_dofs, num_modes=6)
@@ -172,6 +169,7 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "external_open_source_reference": "https://github.com/Dhondtguido/CalculiX",
         "matrix_storage_input": str(workdir / f"{matrix_job}.inp"),
         "nonlinear_contact_input": str(workdir / f"{contact_job}.inp"),
+        "calculix_contact_type": "surface-to-surface",
         "plane_z": plane_z,
         "top_patch_id": int(top_patch.patch_id),
         "top_patch_key": list(top_patch.key),
@@ -180,9 +178,9 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "calculix_contact_stiffness": calculix_contact_stiffness,
         "python_contact_penalty": python_contact_penalty,
         "python_contact_damping": python_contact_damping,
-        "python_contact_model": "area-weighted pressure-overclosure",
-        "python_contact_penalty_source": "full-order alignment sweep against CalculiX displacement history",
-        "full_order_calibration_trials": calibration_trials,
+        "python_contact_model": "surface quadrature pressure-overclosure with Newton contact tangent",
+        "python_full_order_solver": "CalculiX-aligned implicit full-order FEM contact",
+        "python_contact_penalty_source": "same pressure-overclosure stiffness as the CalculiX surface-to-surface input",
         "top_contact_area_sum": float(np.sum(nodal_contact_areas[top_nodes])),
         "free_top_contact_area_sum": float(np.sum(nodal_contact_areas[free_top_nodes])),
         "upward_force_per_free_top_node": upward_force_per_free_top_node,
@@ -210,56 +208,6 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
     }
     (workdir / "three_way_contact_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
-
-
-def calibrate_full_order_contact_against_calculix(
-    fem,
-    surface,
-    plane_z: float,
-    external_force,
-    calculix_history: CalculixNodeHistory,
-    observed_nodes: np.ndarray,
-    dt: float,
-    steps: int,
-    rayleigh_alpha: float,
-    rayleigh_beta: float,
-):
-    penalties = (350.0, 375.0, 400.0, 425.0, 450.0)
-    dampings = (5.0, 6.0, 8.0)
-    trials = []
-    best = None
-    for penalty in penalties:
-        for damping in dampings:
-            plane = PrescribedRigidPlane(
-                point=np.array([0.0, 0.0, plane_z]),
-                normal=np.array([0.0, 0.0, 1.0]),
-                area_weighted=True,
-            )
-            result = FullFEMContactSimulator(
-                fem=fem,
-                surface=surface,
-                rigid_sphere=plane,
-                penalty=penalty,
-                contact_damping=damping,
-                rayleigh_alpha=rayleigh_alpha,
-                rayleigh_beta=rayleigh_beta,
-                external_force=external_force,
-            ).run(dt=dt, steps=steps)
-            summary = compare_to_calculix_observed_displacements_at_times(result, dt, calculix_history, observed_nodes)
-            trial = {
-                "penalty": float(penalty),
-                "contact_damping": float(damping),
-                "relative_observed_displacement_l2": float(summary.relative_observed_displacement_l2),
-                "max_observed_displacement_error": float(summary.max_observed_displacement_error),
-            }
-            trials.append(trial)
-            if best is None or summary.relative_observed_displacement_l2 < best[2].relative_observed_displacement_l2:
-                best = (penalty, damping, summary, result)
-    if best is None:
-        raise RuntimeError("full-order contact calibration did not run any candidate")
-    trials.sort(key=lambda item: item["relative_observed_displacement_l2"])
-    penalty, damping, summary, result = best
-    return float(penalty), float(damping), summary, result, trials[:5]
 
 
 def plot_full_order_alignment(
@@ -426,8 +374,8 @@ def read_calculix_contact_blocks(path: Path) -> dict[str, float | int]:
     max_overclosure = 0.0
     block_kind: str | None = None
     current_time: float | None = None
-    cdis: dict[tuple[float, int], float] = {}
-    stress: dict[tuple[float, int], float] = {}
+    cdis: dict[float, list[float]] = {}
+    stress: dict[float, list[float]] = {}
     for line in lines:
         cdis_match = cdis_header.search(line)
         if cdis_match:
@@ -449,29 +397,31 @@ def read_calculix_contact_blocks(path: Path) -> dict[str, float | int]:
             continue
         parts = line.split()
         if len(parts) != 4:
-            continue
+            if len(parts) != 5:
+                continue
         try:
-            node_id = int(parts[0]) - 1
-            normal_value = float(parts[1].replace("D", "E"))
+            normal_column = 1 if len(parts) == 4 else 2
+            normal_value = float(parts[normal_column].replace("D", "E"))
         except ValueError:
             continue
-        key = (current_time, node_id)
         if block_kind == "cdis":
-            cdis[key] = normal_value
+            cdis.setdefault(current_time, []).append(normal_value)
             max_overclosure = max(max_overclosure, max(-normal_value, 0.0))
         elif block_kind == "stress":
-            stress[key] = normal_value
+            stress.setdefault(current_time, []).append(normal_value)
             row_count += 1
             max_pressure = max(max_pressure, abs(normal_value))
 
     overclosures = []
     pressures = []
-    for key, pressure in stress.items():
-        overclosure = max(-cdis.get(key, 0.0), 0.0)
-        pressure = abs(float(pressure))
-        if overclosure > 1.0e-14 and pressure > 0.0:
-            overclosures.append(overclosure)
-            pressures.append(pressure)
+    for time, pressure_values in stress.items():
+        displacement_values = cdis.get(time, [])
+        for displacement, pressure in zip(displacement_values, pressure_values, strict=False):
+            overclosure = max(-float(displacement), 0.0)
+            pressure = abs(float(pressure))
+            if overclosure > 1.0e-14 and pressure > 0.0:
+                overclosures.append(overclosure)
+                pressures.append(pressure)
     if overclosures:
         overclosure_array = np.asarray(overclosures, dtype=float)
         pressure_array = np.asarray(pressures, dtype=float)

@@ -4,13 +4,14 @@ import numpy as np
 
 from modal_contact_rom.contact_dynamics import (
     AdaptiveModalContactSimulator,
+    CalculixAlignedFullFEMContactSimulator,
     FullFEMContactSimulator,
     PrescribedRigidPlane,
     PrescribedRigidSphere,
     patch_mode_dict,
 )
 from modal_contact_rom.contact_modes import build_patch_normal_loads, solve_patch_contact_modes
-from modal_contact_rom.fem_io import cantilever_block
+from modal_contact_rom.fem_io import cantilever_block, write_cantilever_plane_contact_dynamic_input
 from modal_contact_rom.modal_basis import compute_low_modes
 from modal_contact_rom.reduced_dynamics import compute_craig_bampton_basis, mass_orthonormalize
 from modal_contact_rom.surface_patch import SurfacePatch, extract_surface, partition_surface_patches
@@ -101,6 +102,50 @@ def test_full_fem_plane_contact_accepts_time_dependent_external_force() -> None:
     assert max(step.max_penetration for step in result.steps) > 0.0
     assert result.steps[-1].external_work > 0.0
     assert all(np.isfinite(step.energy_balance_error) for step in result.steps)
+
+
+def test_calculix_aligned_full_fem_plane_contact_uses_surface_quadrature() -> None:
+    fem = cantilever_block(nx=2, ny=1, nz=1, stiffness_scale=100.0)
+    top_nodes = np.flatnonzero(np.isclose(fem.mesh.nodes[:, 2], fem.mesh.nodes[:, 2].max()))
+    free_top_nodes = np.setdiff1d(top_nodes, fem.fixed_nodes, assume_unique=False)
+    force = np.zeros(fem.mesh.n_dofs, dtype=float)
+    force[3 * free_top_nodes + 2] = 5.0
+
+    simulator = CalculixAlignedFullFEMContactSimulator(
+        fem=fem,
+        rigid_plane=PrescribedRigidPlane(point=np.array([0.0, 0.0, 0.51]), normal=np.array([0.0, 0.0, 1.0])),
+        contact_stiffness=200.0,
+        external_force=lambda time: force * min(time / 0.1, 1.0),
+    )
+    result = simulator.run(dt=0.005, steps=80)
+
+    assert max(step.normal_force for step in result.steps) > 0.0
+    assert max(step.max_penetration for step in result.steps) > 0.0
+    assert result.steps[-1].external_work > 0.0
+    assert all(np.isfinite(step.energy_balance_error) for step in result.steps)
+
+
+def test_calculix_contact_writer_can_emit_surface_to_surface(tmp_path) -> None:
+    fem = cantilever_block(nx=1, ny=1, nz=1)
+    top_nodes = np.flatnonzero(np.isclose(fem.mesh.nodes[:, 2], fem.mesh.nodes[:, 2].max()))
+    force = np.zeros(fem.mesh.n_dofs, dtype=float)
+    write_cantilever_plane_contact_dynamic_input(
+        tmp_path / "surface_contact.inp",
+        fem.mesh,
+        fem.fixed_nodes,
+        top_nodes,
+        force,
+        plane_z=0.51,
+        time_step=0.01,
+        total_time=0.02,
+        contact_stiffness=100.0,
+        contact_type="surface_to_surface",
+    )
+
+    text = (tmp_path / "surface_contact.inp").read_text(encoding="utf-8")
+    assert "*SURFACE, NAME=SLAVE\nEFLEX, S2" in text
+    assert "*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE" in text
+    assert "TYPE=NODE" not in text
 
 
 def test_area_weighted_plane_contact_matches_pressure_times_area() -> None:

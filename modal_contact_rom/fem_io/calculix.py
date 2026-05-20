@@ -192,6 +192,7 @@ def write_cantilever_plane_contact_dynamic_input(
     max_increments: int | None = None,
     load_ramp_time: float | None = None,
     direct: bool = True,
+    contact_type: str = "node_to_surface",
 ) -> Path:
     """Write a CalculiX nonlinear contact job against a fixed rigid-like plane."""
 
@@ -203,6 +204,9 @@ def write_cantilever_plane_contact_dynamic_input(
         raise ValueError("contact_stiffness must be positive")
     if load_ramp_time is not None and (load_ramp_time <= 0.0 or load_ramp_time > total_time):
         raise ValueError("load_ramp_time must be positive and no larger than total_time")
+    normalized_contact = contact_type.lower().replace("-", "_").replace(" ", "_")
+    if normalized_contact not in {"node_to_surface", "surface_to_surface"}:
+        raise ValueError("contact_type must be 'node_to_surface' or 'surface_to_surface'")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fixed_nodes = np.asarray(fixed_nodes, dtype=np.int64)
@@ -275,10 +279,28 @@ def write_cantilever_plane_contact_dynamic_input(
             "WALL, 1, 3",
             "*SURFACE, NAME=MASTER",
             "EWALL, S1",
-            "*SURFACE, NAME=SLAVE, TYPE=NODE",
-            "TOP",
-            "*CONTACT PAIR, INTERACTION=SI1, TYPE=NODE TO SURFACE",
-            "SLAVE, MASTER",
+        ]
+    )
+    if normalized_contact == "surface_to_surface":
+        lines.extend(
+            [
+                "*SURFACE, NAME=SLAVE",
+                "EFLEX, S2",
+                "*CONTACT PAIR, INTERACTION=SI1, TYPE=SURFACE TO SURFACE",
+                "SLAVE, MASTER",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "*SURFACE, NAME=SLAVE, TYPE=NODE",
+                "TOP",
+                "*CONTACT PAIR, INTERACTION=SI1, TYPE=NODE TO SURFACE",
+                "SLAVE, MASTER",
+            ]
+        )
+    lines.extend(
+        [
             "*SURFACE INTERACTION, NAME=SI1",
             "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR",
             f"{contact_stiffness:.16g}, 3.",

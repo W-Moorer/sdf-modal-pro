@@ -82,8 +82,9 @@ python examples/compare_three_way_dynamics.py
 The nonlinear contact three-way check first aligns Python full-order FEM
 against a CalculiX `*CONTACT PAIR` full-order run, then compares CalculiX
 full-order contact, Python full-order contact, and adaptive ROM contact. The
-Python plane-contact model uses hex-face tributary areas and a small full-order
-alignment sweep before the ROM result is evaluated:
+CalculiX input uses surface-to-surface contact, and the Python full-order path
+uses the same pressure-overclosure stiffness with surface quadrature, contact
+tangent, and implicit Newton iterations before the ROM result is evaluated:
 
 ```powershell
 python examples/compare_three_way_contact_dynamics.py

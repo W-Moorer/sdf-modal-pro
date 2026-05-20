@@ -30,11 +30,11 @@
 
 ## 2. 拟定论文题目
 
-面向任意表面移动接触的 SDF 驱动补丁剩余界面载荷坐标方法
+面向表面移动接触的 SDF 驱动补丁剩余界面载荷坐标方法
 
 英文备选题目：
 
-SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Moving Contact Dynamics
+SDF-Driven Patch Residual Interface Load Coordinates for Surface Moving Contact Dynamics
 
 ## 3. 摘要大纲
 
@@ -43,39 +43,39 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 - 柔性多体系统中的移动接触需要同时描述整体动力学和局部表面柔度。
 - 全阶 FEM 可以捕捉局部接触响应，但在接触状态反复变化时计算成本过高。
 - 低阶 ROM 难以表示局部接触柔度；普通静态修正模态虽然能恢复局部响应，却会扩大动态基或引入模态切换问题。
-- 既有 free-interface CMS 和 ILC 方法为移动接触降阶提供了理论基础，但仍缺少面向任意 SDF 外表面的活动补丁映射、多尺度补丁激活和外部求解器验证框架。
+- 既有 free-interface CMS 和 ILC 方法为移动接触降阶提供了理论基础，但仍缺少面向三角网格 SDF 表面的活动补丁映射、多尺度补丁激活和外部求解器验证框架。
 
 第二段：本文方法。
 
-- 提出 SDF 驱动的补丁级界面载荷坐标方法，将任意外表面上的移动接触采样映射为面积加权补丁载荷基。
+- 提出 SDF 驱动的补丁级界面载荷坐标方法，将表面移动接触采样映射为面积加权补丁载荷基。
 - 构造由补丁法向载荷基驱动的剩余模态，用补丁静态附着响应恢复局部接触柔度。
 - 将活动补丁 ILC 放在主动态状态之外求解，使接触区域移动和活动补丁集合变化时主 DAE 维度保持不变。
 - 设计多尺度重叠补丁激活策略，通过 coarse/medium/fine 层级、partition-of-unity 权重、滞回、延迟失活和 alpha 暖启动降低跨补丁边界的力和间隙跳变。
 
 第三段：验证证据。
 
-- 通过静态完备性、柔度恢复、准静态压入、移动接触平滑性、小规模全阶 FEM 动力学和大规模性能代理进行验证。
+- 通过静态完备性、SDF 映射、准静态接触、移动接触、CalculiX 三方验证和 scaling estimate 进行验证。
 - 建立全阶 FEM、自适应 ROM 和外部开源 FEM 求解器的三方验证路线，用于降低同源代码自证的风险。
 - 消融对比作为内部一致性检查和附录材料，不在正文中单独设置验收式章节。
 
 ## 4. 与 Yao 论文的创新边界
 
-本文的创新边界必须写得非常清楚：Yao 的 free-interface CMS、residual modes 和 interface load coordinates 是理论来源，不是本文原创。本文的原创性来自将这些思想改造成面向 SDF 任意外表面移动接触的补丁级、自适应、多尺度接触降阶框架。
+本文的创新边界必须写得非常清楚：Yao 的 free-interface CMS、residual modes 和 interface load coordinates 是理论来源，不是本文原创。本文的原创性来自将这些思想改造成面向 SDF 表面移动接触的补丁级、自适应、多尺度接触降阶框架。
 
 | 问题维度 | Yao 论文已有内容 | 本文新增内容 |
 | --- | --- | --- |
 | 理论基础 | free-interface CMS；低频模态表示整体动力学，高频截断模态通过剩余模态补偿局部准静态响应。 | 继承该分解思想，但把局部接触载荷组织为 SDF 驱动的补丁级载荷基。 |
 | ILC 思想 | 用 interface load coordinates 表示剩余模态贡献，避免大量界面自由度直接扩大主系统。 | 不能把 ILC 本身作为原创；应强调 active patch ILC 在接触区域移动和活动集合变化时仍保持主 DAE 维度不变。 |
-| 接触几何 | 面向移动接触多体和齿轮接触，接触界面具有明确机械结构和候选接触对。 | 面向任意外表面，使用 SDF 查询将接触采样点映射到表面三角形和活动补丁。 |
+| 接触几何 | 面向移动接触多体和齿轮接触，接触界面具有明确机械结构和候选接触对。 | 面向三角网格外表面，使用 SDF 查询将接触采样点映射到表面三角形和活动补丁。 |
 | 接触载荷表示 | 更接近界面/节点层级的载荷坐标。 | 构造面积加权 patch load basis，将节点接触压力/穿透等效到补丁载荷坐标。 |
 | 剩余模态构造 | 剩余模态等于全阶静态附着响应减去保留模态静态贡献。 | 保留该数学定义，但静态附着响应由补丁载荷基驱动，用于压缩局部接触柔度表达。 |
-| 活动区域变化 | 重点不在任意表面活动补丁管理。 | 提出 SDF-driven active patch set，并处理活动补丁随接触位置移动而变化的问题。 |
+| 活动区域变化 | 重点不在 SDF 表面活动补丁管理。 | 提出 SDF-driven active patch set，并处理活动补丁随接触位置移动而变化的问题。 |
 | 平滑策略 | 不以跨补丁边界连续性为核心。 | 提出多尺度重叠补丁激活、partition-of-unity、滞回、延迟失活和 alpha 暖启动。 |
 | 验证体系 | 静态完备性、接触算法、FEM/ALE 对比和齿轮应用。 | 加入全阶 FEM、自适应 ROM、外部开源 FEM 求解器三方验证；消融结果作为内部证据或附录，不作为正文独立章节。 |
 
 一句话创新定位：
 
-> 本文不是提出新的 CMS 或新的 ILC 理论，而是提出一种面向 SDF 任意外表面移动接触的补丁级剩余 ILC 框架，使局部接触柔度、活动接触区域变化和主 DAE 维度不变性可以同时成立。
+> 本文不是提出新的 CMS 或新的 ILC 理论，而是提出一种面向 SDF 表面移动接触的补丁级剩余 ILC 框架，使局部接触柔度、活动接触区域变化和主 DAE 维度不变性可以同时成立。
 
 ## 5. 分章节大纲
 
@@ -85,10 +85,10 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 2. 全阶 FEM 精度高，但当接触区域在细分表面上移动时，时间积分和接触搜索成本很高。
 3. 低阶模态 ROM 计算高效，但不能准确表达局部接触柔度。
 4. 普通静态修正模态可以恢复局部响应，但会增加动态坐标数量，或者需要在接触区域变化时切换模态。
-5. Free-interface CMS、剩余模态和 ILC 为移动接触降阶提供了可借鉴基础，但这些方法通常没有解决任意 SDF 外表面上接触采样到活动补丁的映射、活动集合变化时的平滑性，以及外部求解器三方验证问题。
+5. Free-interface CMS、剩余模态和 ILC 为移动接触降阶提供了可借鉴基础，但这些方法通常没有解决 SDF 表面上接触采样到活动补丁的映射、活动集合变化时的平滑性，以及外部求解器三方验证问题。
 6. 本文提出 SDF 驱动的补丁剩余 ILC 框架，在活动接触区域移动时保持主 DAE 维度不变，并用多尺度活动补丁恢复局部接触柔度。
 7. 本文贡献限定为以下四项：
-   - 提出 SDF-driven patch ILC，将任意外表面移动接触采样映射为面积加权补丁载荷坐标，避免直接使用节点级接触自由度。
+   - 提出 SDF-driven patch ILC，将表面移动接触采样映射为面积加权补丁载荷坐标，避免直接使用节点级接触自由度。
    - 构造 patch-load-driven residual modes，用补丁静态附着响应恢复局部接触柔度，同时保留低阶自由界面模态描述整体动力学。
    - 设计 active patch ILC coupling outside the main DAE，使活动补丁数量和位置变化时主动态系统维度保持不变。
    - 提出 multi-scale overlapping patch activation，通过粗/中/细层级、partition-of-unity、滞回、延迟失活和 warm start 改善跨补丁边界的接触连续性，并用全阶 FEM/ROM/CalculiX 三方验证支撑结果可信度。
@@ -192,7 +192,7 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 - 中尺度补丁覆盖当前接触邻域。
 - 当投影误差或接触力梯度较大时激活细尺度重叠补丁。
 - 用 partition-of-unity 权重在重叠补丁之间分配接触力。
-- 将多尺度策略写成本文最强差异化贡献之一，因为 Yao 论文不处理任意 SDF 表面上的活动补丁平滑问题。
+- 将多尺度策略写成本文最强差异化贡献之一，因为 Yao 论文不处理 SDF 表面上的活动补丁平滑问题。
 
 预期图表：
 
@@ -205,7 +205,7 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 #### 5.1 基于 SDF 的接触检测
 
 - 定义查询点、最近表面三角形、间隙、法向和穿透量。
-- 说明 SDF/BVH 查询适合任意外表面的移动接触检测。
+- 说明 SDF/BVH 查询适合三角网格外表面的移动接触检测。
 - 强调这与 Yao 的齿轮接触背景不同：本文目标是更一般的外表面移动接触。
 
 #### 5.2 力投影与 penalty 标定
@@ -243,7 +243,34 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 - max completeness error = 2.180325e-17
 - compressed residual compliance error = 2.456128e-02
 
-#### 6.2 准静态压入验证
+#### 6.2 SDF 到补丁载荷投影验证
+
+目的：证明 SDF 接触采样能够稳定映射为活动补丁 ILC，并保持等效接触载荷的一致性。
+
+算例：
+
+- 单补丁接触采样。
+- 双补丁边界接触采样。
+- 无接触采样。
+
+指标：
+
+- 活动补丁数量与预期补丁数量。
+- 总力误差、总法向力误差和力矩误差。
+- alpha 维度和主动态系统维度贡献。
+
+预期结果：
+
+- 三类 SDF 映射算例全部通过。
+- 总力、法向力和力矩误差 < 1e-12。
+- dynamic dimension contribution = 0。
+
+预期图表：
+
+- `sdf_patch_projection_map.png`
+- `sdf_patch_projection.csv`
+
+#### 6.3 准静态接触验证
 
 目的：证明局部接触刚度可以被恢复，并区分低阶模态、普通静态模态和补丁剩余 ILC。
 
@@ -267,7 +294,7 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 - `force_displacement_curve.png`
 - `contact_force_error.csv`
 
-#### 6.3 移动接触验证
+#### 6.4 移动接触验证
 
 目的：证明 SDF 活动补丁检测可以处理跨补丁边界的移动接触。
 
@@ -285,52 +312,47 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 - gap jump < 5%。
 - 自适应活动补丁的能量漂移不高于全活动补丁基准。
 
-#### 6.4 小规模全阶 FEM 动力学对比
+#### 6.5 CalculiX 三方验证
 
-目的：在可控规模上提供全阶 FEM 时程参考，而不是只依赖大规模全阶 FEM 代理。
-
-指标：
-
-- 位移 RMSE。
-- 速度 RMSE。
-- 接触力峰值误差。
-- 接触冲量误差。
-- 实测 wall-time 运行时间比例。
-- 求解器维度加速比。
-
-预期结果：
-
-- displacement RMSE = 6.448974e-06
-- velocity RMSE = 6.706009e-04
-- peak force error = 0
-- impulse error = 0
-- solver-dimension speedup = 6.292217x
-
-#### 6.5 外部开源 FEM 三方验证
-
-目的：避免“全阶 FEM 和 ROM 同源实现互相证明”的问题，用外部求解器增强可信度。
+目的：避免“全阶 FEM 和 ROM 同源实现互相证明”的问题，用外部开源求解器验证主要时程曲线和非线性接触响应。
 
 对比对象：
 
 - 项目内全阶 FEM 动力学解。
 - 自适应补丁剩余 ROM 解。
-- CalculiX 或其他外部开源 FEM 动力学/非线性接触解。
+- CalculiX 全阶 FEM 动力学/非线性接触解。
+
+验证算例：
+
+- 线性动力学三方位移时程对比。
+- CalculiX surface-to-surface 非线性接触三方对比。
 
 指标：
 
-- 位移时程曲线一致性。
-- 接触力时程曲线一致性。
-- 接触压力或等效节点力分布。
-- 非线性接触中的穿透量、压力峰值和接触区域演化。
+- 位移时程相对误差。
+- 接触力时程相对误差。
+- SFC 全阶 FEM 与 CalculiX matrix storage 的刚度/质量矩阵一致性。
+- 非线性接触中的穿透量、压力峰值和 contact pressure-overclosure 斜率。
 
-写作定位：
+预期结果：
 
-- 这是验证贡献，不是理论创新。
-- 它用于证明方法结果不是由项目内部同源 FEM 偶然对齐。
+- 线性动力学中 Python full FEM vs CalculiX displacement relative L2 = 0.011581。
+- 线性动力学中 adaptive ROM vs Python full FEM relative L2 = 0.003701。
+- 非线性接触中 SFC stiffness/mass matrix vs CalculiX relative L2 < 1.2e-14。
+- 非线性接触中 Python full FEM vs CalculiX displacement relative L2 = 0.005014。
+- 非线性接触中 adaptive ROM vs Python full FEM force relative L2 = 1.765600e-13。
+- CalculiX pressure-overclosure slope = 499.999996，对应目标 stiffness = 500.0。
 
-#### 6.6 大规模性能验证
+预期图表：
 
-目的：在不运行大规模全阶 FEM 时程的情况下展示方法的规模化行为。
+- `three_way_external_fem.csv`
+- `three_way_dynamic_displacement.png`
+- `three_way_nonlinear_contact_displacement.png`
+- `three_way_nonlinear_contact_activity.png`
+
+#### 6.6 Scaling estimate 与活动补丁代价分析
+
+目的：在不声称完整工业 wall-time benchmark 的前提下，估计活动补丁策略对求解器维度、接触坐标规模和运行代价的影响。
 
 对比对象：
 
@@ -339,6 +361,20 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 - node-level ILC 估计。
 - coarse-only patch。
 - multi-scale patch。
+
+指标：
+
+- dynamic DOFs。
+- active patch/ILC DOFs。
+- node-level contact DOFs。
+- active patch fraction。
+- solver-dimension speedup。
+- runtime proxy 和 memory proxy。
+
+写作定位：
+
+- 这是 scalability estimate 和 active-patch cost analysis，不是完整大规模全阶 FEM 时间积分基准。
+- 只用于说明活动补丁策略的规模化趋势和计算代价来源。
 
 预期图表：
 
@@ -349,8 +385,8 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 
 第一段：方法回顾。
 
-- 本文没有提出新的 CMS 或 ILC 理论，而是提出了面向任意 SDF 外表面移动接触的补丁级剩余 ILC 框架。
-- SDF 活动补丁投影支持任意外表面上的移动接触。
+- 本文没有提出新的 CMS 或 ILC 理论，而是提出了面向 SDF 表面移动接触的补丁级剩余 ILC 框架。
+- SDF 活动补丁投影支持三角网格外表面上的移动接触。
 - 补丁载荷驱动的剩余模态恢复局部接触柔度。
 - 多尺度重叠补丁激活提高跨补丁边界的连续性和精度/效率平衡。
 
@@ -358,7 +394,7 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 
 - 静态完备性和柔度恢复已经验证。
 - 移动接触中的力跳变和间隙跳变受到约束。
-- 小规模全阶 FEM 动力学、大规模性能代理和外部开源 FEM 三方验证支撑该方法。
+- SDF 映射验证、准静态接触、移动接触、CalculiX 三方验证和 scaling estimate 支撑该方法。
 - 消融对比可作为附录或补充材料，用于说明各模块对精度和效率的贡献。
 
 第三段：局限与未来工作。
@@ -372,24 +408,24 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 
 1. `method_pipeline.png`：方法总览，突出 SDF -> patch load basis -> residual ILC -> active set。
 2. `patch_hierarchy.png`：粗/中/细补丁层级和重叠区域。
-3. `force_displacement_curve.png`：准静态压入对比。
-4. `active_patch_history.png`：移动接触中的活动补丁数量和接触力。
-5. `runtime_scaling.png`：运行时间代理对比。
-6. `sdf_patch_projection_map.png`：SDF 接触采样映射到活动补丁 ILC 的算例证据。
-7. `three_way_dynamic_displacement.png`：线性动力学三方位移时程对比。
-8. `three_way_nonlinear_contact_displacement.png`：非线性接触三方位移时程对比。
-9. `three_way_nonlinear_contact_activity.png`：非线性接触穿透量和接触力活动证据。
+3. `sdf_patch_projection_map.png`：SDF 接触采样映射到活动补丁 ILC 的算例证据。
+4. `force_displacement_curve.png`：准静态接触力-位移对比。
+5. `active_patch_history.png`：移动接触中的活动补丁数量和接触力。
+6. `three_way_dynamic_displacement.png`：线性动力学三方位移时程对比。
+7. `three_way_nonlinear_contact_displacement.png`：非线性接触三方位移时程对比。
+8. `three_way_nonlinear_contact_activity.png`：非线性接触穿透量和接触力活动证据。
+9. `runtime_scaling.png`：scaling estimate 和活动补丁代价对比。
 
 ### 表
 
 1. `yao_boundary_table.csv`：Yao 已有内容与本文新增内容边界。
 2. `static_completeness.csv`：补丁静态重构。
-3. `compliance_error.csv`：柔度恢复。
-4. `contact_force_error.csv`：压入和动态接触力误差。
-5. `runtime_scaling.csv`：规模化能力对比。
-6. `ablation_summary.csv`：A-E 模块对比，建议作为附录或补充材料。
-7. `sdf_patch_projection.csv`：单补丁、双补丁边界和无接触三类 SDF->patch ILC 映射算例。
-8. `three_way_external_fem.csv`：项目内全阶 FEM、自适应 ROM、CalculiX 外部 FEM 三方验证算例。
+3. `sdf_patch_projection.csv`：单补丁、双补丁边界和无接触三类 SDF->patch ILC 映射算例。
+4. `compliance_error.csv`：柔度恢复。
+5. `contact_force_error.csv`：压入和动态接触力误差。
+6. `three_way_external_fem.csv`：项目内全阶 FEM、自适应 ROM、CalculiX 外部 FEM 三方验证算例。
+7. `runtime_scaling.csv`：scaling estimate 和活动补丁代价对比。
+8. `ablation_summary.csv`：A-E 模块对比，建议作为附录或补充材料。
 
 ## 7. 内部证据映射（不作为正文章节）
 

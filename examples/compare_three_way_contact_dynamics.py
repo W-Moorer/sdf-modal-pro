@@ -18,9 +18,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from modal_contact_rom.contact_dynamics import (
+    AdaptiveCalculixAlignedROMContactSimulator,
     CalculixAlignedFullFEMContactSimulator,
-    CalculixAlignedROMContactSimulator,
     PrescribedRigidPlane,
+    patch_mode_dict,
 )
 from modal_contact_rom.contact_modes import build_patch_normal_loads, solve_patch_contact_modes
 from modal_contact_rom.fem_io import (
@@ -149,16 +150,24 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         fem.mesh.dof_indices(interface_nodes),
         num_fixed_interface_modes=4,
     )
-    base_basis = mass_orthonormalize(fem.M, np.column_stack((cb.basis, low.modes, contact_modes.modes)))
-    rom = CalculixAlignedROMContactSimulator(
+    base_basis = mass_orthonormalize(fem.M, np.column_stack((cb.basis, low.modes)))
+    residual_activation_count = max(int(contact_modes.patch_ids.size) - 1, 0)
+    rom = AdaptiveCalculixAlignedROMContactSimulator(
         fem=fem,
-        basis=base_basis,
+        surface=surface,
+        patches=patches,
+        base_basis=base_basis,
+        patch_modes=patch_mode_dict(contact_modes.patch_ids, contact_modes.modes),
         rigid_plane=rigid_plane,
         contact_stiffness=python_contact_penalty,
         rayleigh_alpha=rayleigh_alpha,
         rayleigh_beta=rayleigh_beta,
         external_force=external_force,
         hht_alpha=0.0,
+        activation_count=1,
+        residual_activation_count=residual_activation_count,
+        retain_active_patches=True,
+        max_activation_iterations=max(4, int(contact_modes.patch_ids.size) + 1),
     ).run(dt=dt, steps=steps)
 
     rom_vs_full = compare_dynamic_results(full, rom)
@@ -199,18 +208,23 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "python_contact_damping": python_contact_damping,
         "python_contact_model": "surface quadrature pressure-overclosure with Newton contact tangent",
         "python_full_order_solver": "SFC-assembled CalculiX-aligned implicit full-order FEM contact",
-        "rom_solver": "SFC-assembled projected ROM with the same surface-quadrature contact tangent",
+        "rom_solver": "SFC-assembled adaptive ROM with contact-point and residual patch-mode activation",
         "python_contact_penalty_source": "same pressure-overclosure stiffness as the CalculiX surface-to-surface input",
         "top_contact_area_sum": float(np.sum(nodal_contact_areas[top_nodes])),
         "free_top_contact_area_sum": float(np.sum(nodal_contact_areas[free_top_nodes])),
         "upward_force_per_free_top_node": upward_force_per_free_top_node,
         "load_ramp_time": load_ramp_time,
-        "projected_rom_modes": int(base_basis.shape[1]),
+        "adaptive_base_modes": int(base_basis.shape[1]),
+        "adaptive_min_modes": int(min(rom.basis_size_history)),
+        "adaptive_max_modes": int(max(rom.basis_size_history)),
+        "adaptive_activation_count": 1,
+        "adaptive_residual_activation_count": int(residual_activation_count),
+        "adaptive_active_patch_ids": [int(patch_id) for patch_id in sorted({pid for active in rom.active_patch_history for pid in active})],
         "full_free_dofs": int(fem.free_dofs.size),
         "max_python_full_contact_force": float(max(step.normal_force for step in full.steps)),
-        "max_projected_rom_contact_force": float(max(step.normal_force for step in rom.steps)),
+        "max_adaptive_rom_contact_force": float(max(step.normal_force for step in rom.steps)),
         "max_python_full_penetration": float(max(step.max_penetration for step in full.steps)),
-        "max_projected_rom_penetration": float(max(step.max_penetration for step in rom.steps)),
+        "max_adaptive_rom_penetration": float(max(step.max_penetration for step in rom.steps)),
         "max_calculix_observed_penetration": max_calculix_observed_penetration(calculix_history, top_nodes, seed.mesh.nodes, plane_z),
         "calculix_contact_stress_blocks": int(calculix_contact["block_count"]),
         "calculix_contact_stress_rows": int(calculix_contact["row_count"]),
@@ -220,8 +234,8 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "calculix_output_pressure_overclosure_lsq_slope": float(calculix_contact["equivalent_pressure_stiffness"]),
         "calculix_output_max_pressure_overclosure_ratio": float(calculix_contact["max_pressure_overclosure_ratio"]),
         "python_full_vs_calculix": asdict(full_vs_calculix),
-        "projected_rom_vs_python_full": asdict(rom_vs_full),
-        "projected_rom_vs_calculix": asdict(rom_vs_calculix),
+        "adaptive_rom_vs_python_full": asdict(rom_vs_full),
+        "adaptive_rom_vs_calculix": asdict(rom_vs_calculix),
         "representative_node_displacement_error": representative_node_error,
         "full_order_alignment_figure": str(full_order_figure),
         "displacement_figure": str(displacement_figure),
@@ -285,7 +299,7 @@ def plot_three_way_top_displacement(
     fig, ax = plt.subplots(figsize=(9.5, 5.0), constrained_layout=True)
     ax.plot(ccx_time, ccx, label="CalculiX nonlinear contact full FEM", linewidth=2.1)
     ax.plot(time, py, "--", label="Python full FEM contact", linewidth=1.8)
-    ax.plot(time, reduced, ":", label="Projected ROM contact", linewidth=2.2)
+    ax.plot(time, reduced, ":", label="Adaptive ROM contact", linewidth=2.2)
     ax.set_xlabel("time")
     ax.set_ylabel("top-node Uz")
     ax.set_title(f"Nonlinear contact three-way displacement, node {node_id + 1}")
@@ -313,14 +327,14 @@ def plot_three_way_top_displacement_error(
     fig, axes = plt.subplots(3, 1, figsize=(9.5, 8.0), sharex=False, constrained_layout=True)
     axes[0].plot(ccx_time, ccx, label="CalculiX nonlinear contact full FEM", linewidth=2.1)
     axes[0].plot(time, py, "--", label="Python full FEM contact", linewidth=1.8)
-    axes[0].plot(time, reduced, ":", label="Projected ROM contact", linewidth=2.2)
+    axes[0].plot(time, reduced, ":", label="Adaptive ROM contact", linewidth=2.2)
     axes[0].set_ylabel("Uz")
     axes[0].grid(True, alpha=0.35)
     axes[0].legend(fontsize=8)
 
     axes[1].plot(time, reduced - py, color="tab:green", linewidth=1.8)
     axes[1].axhline(0.0, color="0.35", linewidth=0.8)
-    axes[1].set_ylabel("ROM - Python full")
+    axes[1].set_ylabel("Adaptive ROM - Python full")
     axes[1].ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
     axes[1].grid(True, alpha=0.35)
 
@@ -351,8 +365,8 @@ def representative_node_displacement_error_summary(
     return {
         "node_id_zero_based": int(node_id),
         "node_id_one_based": int(node_id + 1),
-        "rom_minus_python_full_max_abs_uz": float(np.max(np.abs(reduced - py))),
-        "rom_minus_python_full_relative_l2_uz": relative_l2(py, reduced),
+        "adaptive_rom_minus_python_full_max_abs_uz": float(np.max(np.abs(reduced - py))),
+        "adaptive_rom_minus_python_full_relative_l2_uz": relative_l2(py, reduced),
         "calculix_minus_python_full_max_abs_uz": float(np.max(np.abs(ccx - py_at_ccx))),
         "calculix_minus_python_full_relative_l2_uz": relative_l2(ccx, py_at_ccx),
     }
@@ -413,12 +427,12 @@ def plot_contact_activity(
     fig, axes = plt.subplots(2, 1, figsize=(9.5, 7.0), sharex=True, constrained_layout=True)
     axes[0].plot(ccx_time, ccx_penetration, label="CalculiX observed penetration", linewidth=2.1)
     axes[0].plot(time, full_penetration, "--", label="Python full FEM penetration", linewidth=1.8)
-    axes[0].plot(time, rom_penetration, ":", label="Projected ROM penetration", linewidth=2.2)
+    axes[0].plot(time, rom_penetration, ":", label="Adaptive ROM penetration", linewidth=2.2)
     axes[0].set_ylabel("max top penetration")
     axes[0].grid(True, alpha=0.35)
     axes[0].legend(fontsize=8)
     axes[1].plot(time, full_force, "--", label="Python full FEM normal force", linewidth=1.8)
-    axes[1].plot(time, rom_force, ":", label="Projected ROM normal force", linewidth=2.2)
+    axes[1].plot(time, rom_force, ":", label="Adaptive ROM normal force", linewidth=2.2)
     axes[1].set_xlabel("time")
     axes[1].set_ylabel("normal contact force")
     axes[1].grid(True, alpha=0.35)

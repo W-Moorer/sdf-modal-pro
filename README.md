@@ -84,12 +84,27 @@ python examples/compare_three_way_dynamics.py
 The nonlinear contact three-way check first aligns SFC-assembled Python
 full-order FEM
 against a CalculiX `*CONTACT PAIR` full-order run, then compares CalculiX
-full-order contact, Python full-order contact, and projected ROM contact. The
+full-order contact, Python full-order contact, and adaptive ROM contact. The
 CalculiX input uses surface-to-surface contact, and the Python full-order path
 uses the same pressure-overclosure stiffness with surface quadrature, contact
-tangent, and implicit Newton iterations. The projected ROM uses the same
-contact residual and tangent, so the three curves isolate modal truncation
-instead of contact-discretization mismatch:
+tangent, and implicit Newton iterations.
+
+## Third Version Adaptive Modal Library
+
+The third-version path replaces the older explicit nodal adaptive contact
+prototype with `AdaptiveCalculixAlignedROMContactSimulator`. It keeps the same
+surface-quadrature contact residual and tangent as the aligned full-order FEM,
+but updates the reduced basis online:
+
+- contact quadrature points activate the nearest normal-aligned surface patch
+  modes;
+- the full-order equilibrium residual is projected onto inactive patch modes,
+  activating missing modal directions when their virtual-work score is large;
+- when the active set changes, the time step is retried from the last accepted
+  state with the updated reduced contact Jacobian.
+
+This gives an adaptive modal flexible-body validation path that can be compared
+directly against both SFC full-order FEM and CalculiX nonlinear contact:
 
 ```powershell
 python examples/compare_three_way_contact_dynamics.py

@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from modal_contact_rom.contact_dynamics import (
+    AdaptiveCalculixAlignedROMContactSimulator,
     AdaptiveModalContactSimulator,
     CalculixAlignedFullFEMContactSimulator,
     CalculixAlignedROMContactSimulator,
@@ -16,6 +17,7 @@ from modal_contact_rom.fem_io import cantilever_block, sfc_cantilever_block, wri
 from modal_contact_rom.modal_basis import compute_low_modes
 from modal_contact_rom.reduced_dynamics import compute_craig_bampton_basis, mass_orthonormalize
 from modal_contact_rom.surface_patch import SurfacePatch, extract_surface, partition_surface_patches
+from modal_contact_rom.validation import compare_dynamic_results
 
 
 def test_craig_bampton_interface_modes_preserve_interface_dofs() -> None:
@@ -164,6 +166,103 @@ def test_calculix_aligned_rom_matches_full_when_basis_spans_free_dofs() -> None:
 
     np.testing.assert_allclose(rom.displacement_history, full.displacement_history, rtol=1.0e-10, atol=1.0e-12)
     np.testing.assert_allclose(rom.velocity_history, full.velocity_history, rtol=1.0e-10, atol=1.0e-12)
+
+
+def test_adaptive_calculix_aligned_rom_matches_full_and_activates_patch() -> None:
+    fem = sfc_cantilever_block(nx=1, ny=1, nz=1, length=1.0, width=1.0, height=1.0)
+    surface = extract_surface(fem.mesh)
+    patches = partition_surface_patches(surface, bins=(1, 1))
+    top_patch = next(patch for patch in patches if patch.key[:2] == (2, 1))
+    top_nodes = np.flatnonzero(np.isclose(fem.mesh.nodes[:, 2], fem.mesh.nodes[:, 2].max()))
+    free_top_nodes = np.setdiff1d(top_nodes, fem.fixed_nodes, assume_unique=False)
+    force = np.zeros(fem.mesh.n_dofs, dtype=float)
+    force[3 * free_top_nodes + 2] = 4.0
+    plane = PrescribedRigidPlane(point=np.array([0.0, 0.0, 0.505]), normal=np.array([0.0, 0.0, 1.0]))
+    external = lambda time: force * min(time / 0.02, 1.0)
+
+    full = CalculixAlignedFullFEMContactSimulator(
+        fem=fem,
+        rigid_plane=plane,
+        contact_stiffness=100.0,
+        external_force=external,
+    ).run(dt=0.002, steps=30)
+    basis = np.eye(fem.mesh.n_dofs)[:, fem.free_dofs]
+    adaptive = AdaptiveCalculixAlignedROMContactSimulator(
+        fem=fem,
+        surface=surface,
+        patches=patches,
+        base_basis=basis,
+        patch_modes={top_patch.patch_id: basis[:, 0]},
+        rigid_plane=plane,
+        contact_stiffness=100.0,
+        external_force=external,
+        activation_count=1,
+    ).run(dt=0.002, steps=30)
+
+    active_ids = {patch_id for active in adaptive.active_patch_history for patch_id in active}
+    assert top_patch.patch_id in active_ids
+    assert max(step.normal_force for step in adaptive.steps) > 0.0
+    np.testing.assert_allclose(adaptive.displacement_history, full.displacement_history, rtol=1.0e-10, atol=1.0e-12)
+    np.testing.assert_allclose(adaptive.velocity_history, full.velocity_history, rtol=1.0e-10, atol=1.0e-12)
+
+
+def test_adaptive_residual_activation_recovers_aligned_full_contact_path() -> None:
+    fem = sfc_cantilever_block(
+        nx=2,
+        ny=1,
+        nz=1,
+        length=2.0,
+        width=1.0,
+        height=1.0,
+        young_modulus=1000.0,
+        poisson_ratio=0.3,
+        density=1.0,
+        mass_kind="consistent",
+    )
+    surface = extract_surface(fem.mesh)
+    patches = partition_surface_patches(surface, bins=(1, 1))
+    top_nodes = np.flatnonzero(np.isclose(fem.mesh.nodes[:, 2], fem.mesh.nodes[:, 2].max()))
+    free_top_nodes = np.setdiff1d(top_nodes, fem.fixed_nodes, assume_unique=False)
+    force = np.zeros(fem.mesh.n_dofs, dtype=float)
+    force[3 * free_top_nodes + 2] = 1.35
+    plane = PrescribedRigidPlane(point=np.array([0.0, 0.0, 0.525]), normal=np.array([0.0, 0.0, 1.0]))
+    external = lambda time: force * min(time / 0.08, 1.0)
+
+    full = CalculixAlignedFullFEMContactSimulator(
+        fem=fem,
+        rigid_plane=plane,
+        contact_stiffness=500.0,
+        external_force=external,
+    ).run(dt=0.000625, steps=281)
+    contact = solve_patch_contact_modes(fem.K, build_patch_normal_loads(fem.mesh, surface, patches), fem.free_dofs)
+    low = compute_low_modes(fem.K, fem.M, fem.free_dofs, num_modes=6)
+    interface_nodes = np.flatnonzero(np.isclose(fem.mesh.nodes[:, 0], fem.mesh.nodes[:, 0].max()))
+    cb = compute_craig_bampton_basis(
+        fem.K,
+        fem.M,
+        fem.free_dofs,
+        fem.mesh.dof_indices(interface_nodes),
+        num_fixed_interface_modes=4,
+    )
+    base_basis = mass_orthonormalize(fem.M, np.column_stack((cb.basis, low.modes)))
+    adaptive = AdaptiveCalculixAlignedROMContactSimulator(
+        fem=fem,
+        surface=surface,
+        patches=patches,
+        base_basis=base_basis,
+        patch_modes=patch_mode_dict(contact.patch_ids, contact.modes),
+        rigid_plane=plane,
+        contact_stiffness=500.0,
+        external_force=external,
+        activation_count=1,
+        residual_activation_count=max(int(contact.patch_ids.size) - 1, 0),
+        max_activation_iterations=max(4, int(contact.patch_ids.size) + 1),
+    ).run(dt=0.000625, steps=281)
+
+    summary = compare_dynamic_results(full, adaptive)
+    assert summary.relative_displacement_l2 < 1.0e-10
+    assert summary.relative_force_l2 < 1.0e-10
+    assert len({patch_id for active in adaptive.active_patch_history for patch_id in active}) > 1
 
 
 def test_calculix_contact_writer_can_emit_surface_to_surface(tmp_path) -> None:

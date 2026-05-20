@@ -5,6 +5,9 @@ from modal_contact_rom.contact_dynamics.rigid import (
     SurfaceContactForce,
 )
 from modal_contact_rom.contact_dynamics.full_order import (
+    AdaptiveCalculixAlignedROMContactSimulator,
+    AdaptiveROMContactStep,
+    AdaptiveROMSimulationResult,
     CalculixAlignedFullFEMContactSimulator,
     CalculixAlignedROMContactSimulator,
     FullFEMContactSimulator,
@@ -26,7 +29,10 @@ from modal_contact_rom.contact_dynamics.simulator import (
 
 __all__ = [
     "AdaptiveContactStep",
+    "AdaptiveCalculixAlignedROMContactSimulator",
     "AdaptiveModalContactSimulator",
+    "AdaptiveROMContactStep",
+    "AdaptiveROMSimulationResult",
     "AdaptiveSimulationResult",
     "CalculixAlignedFullFEMContactSimulator",
     "CalculixAlignedROMContactSimulator",

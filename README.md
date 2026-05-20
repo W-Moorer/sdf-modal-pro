@@ -24,6 +24,12 @@ python examples/run_first_version.py
 Expected result: `combined` has much lower compliance and energy errors than
 `low_modes`.
 
+To generate validation plots and surface diagnostic clouds:
+
+```powershell
+python examples/visualize_first_version.py
+```
+
 ## Modules
 
 ```text
@@ -44,3 +50,13 @@ modal_contact_rom/
 python -m pytest tests
 ```
 
+## CalculiX Through WSL
+
+The project can call CalculiX from Windows through WSL. The example below
+generates a C3D8 cantilever input deck, runs `ccx` in WSL with
+`*FREQUENCY, SOLVER=MATRIXSTORAGE`, reads `job.sti`, `job.mas`, and `job.dof`,
+then feeds the CalculiX K/M matrices into the same patch-ROM validation chain.
+
+```powershell
+python examples/run_calculix_matrix_storage.py
+```

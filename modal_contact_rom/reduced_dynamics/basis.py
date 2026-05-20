@@ -9,6 +9,7 @@ def mass_orthonormalize(
     M: sp.spmatrix,
     vectors: np.ndarray,
     rtol: float = 1.0e-10,
+    atol: float = 1.0e-30,
 ) -> np.ndarray:
     """Return an M-orthonormal basis spanning the input vectors."""
 
@@ -18,18 +19,25 @@ def mass_orthonormalize(
     if vectors.shape[1] == 0:
         return np.zeros((vectors.shape[0], 0), dtype=float)
 
-    gram = vectors.T @ (M @ vectors)
+    mv = M @ vectors
+    column_norms = np.sqrt(np.maximum(np.sum(vectors * mv, axis=0), 0.0))
+    keep_columns = column_norms > atol
+    if not np.any(keep_columns):
+        return np.zeros((vectors.shape[0], 0), dtype=float)
+
+    scaled = vectors[:, keep_columns] / column_norms[keep_columns]
+    gram = scaled.T @ (M @ scaled)
     gram = 0.5 * (gram + gram.T)
     values, transform = la.eigh(gram)
     if values.size == 0:
         return np.zeros((vectors.shape[0], 0), dtype=float)
 
-    threshold = max(float(np.max(values)) * rtol, rtol)
+    threshold = float(np.max(values)) * rtol
     keep = values > threshold
     if not np.any(keep):
         return np.zeros((vectors.shape[0], 0), dtype=float)
 
-    return vectors @ transform[:, keep] @ np.diag(1.0 / np.sqrt(values[keep]))
+    return scaled @ transform[:, keep] @ np.diag(1.0 / np.sqrt(values[keep]))
 
 
 def reduced_static_response(K: sp.spmatrix, basis: np.ndarray, load: np.ndarray) -> np.ndarray:
@@ -41,4 +49,3 @@ def reduced_static_response(K: sp.spmatrix, basis: np.ndarray, load: np.ndarray)
     fr = basis.T @ load
     qr = la.solve(0.5 * (Kr + Kr.T), fr, assume_a="sym")
     return basis @ qr
-

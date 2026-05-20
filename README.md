@@ -56,6 +56,20 @@ conditioning, and cross-patch correlation.
 python examples/run_patch_load_basis.py
 ```
 
+## Phase 4 Patch Residual Modes
+
+The fourth roadmap phase builds offline residual modes for the patch load
+basis. For each patch load column it solves the constrained static attachment
+problem `K G_B = B`, subtracts the retained modal static contribution
+`Psi K_kk^-1 Psi.T B`, and stores the remaining local correction as
+`Phi_B`. The reconstruction `Psi K_kk^-1 Psi.T B alpha + Phi_B alpha`
+matches the full static attachment response while keeping `alpha` outside the
+dynamic state.
+
+```powershell
+python examples/run_patch_residual_modes.py
+```
+
 ## Modules
 
 ```text

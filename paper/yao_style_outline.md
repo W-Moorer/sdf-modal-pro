@@ -1,277 +1,276 @@
-# Paper Outline Following Yao et al. Reference 9
+# 仿照 Yao 等论文格式的中文论文大纲
 
-## 1. Analysis of the Yao et al. Paper Format
+## 1. Yao 等论文写作结构分析
 
-Reference 9 is structured as a mechanics-method paper rather than a purely algorithmic paper. Its main writing pattern is:
+参考文献 9 更接近一篇力学方法论文，而不是单纯的软件或算法论文。它的写作主线是：
 
-1. Start from an engineering contact problem where full FEM is accurate but too expensive.
-2. Review existing MOR/CMS/contact-interface treatments and identify one central bottleneck: local contact accuracy requires many interface DOFs.
-3. Introduce one reduced formulation that keeps local contact accuracy while preventing the DAE dimension from growing.
-4. Derive the method in a layered order: kinematics, modal convergence criterion, mode-set construction, residual-mode calculation, equations of motion, efficient coordinate solution, contact algorithm.
-5. Validate progressively: static completeness, truncation criterion, contact algorithm, dynamic comparison with full FEM or prior methods, then a larger application that full FEM cannot conveniently cover.
-6. Close with concise claims on accuracy, efficiency, and generalization to other moving-contact systems.
+1. 从工程中的移动接触问题出发：全阶有限元精度高，但在动态接触和大规模模型中计算代价过高。
+2. 回顾已有的降阶、CMS、接触界面处理方法，并指出核心瓶颈：局部接触精度需要大量界面自由度。
+3. 提出一种既能保持局部接触精度、又不显著增加 DAE 维度的降阶表达。
+4. 按层次推导方法：运动学、模态收敛判据、模态集合构造、剩余模态计算、运动方程、界面载荷坐标高效求解、接触算法。
+5. 逐级验证：静态完备性、截断准则、接触算法、与全阶 FEM 或已有方法的动态对比，以及一个更大规模的工程应用。
+6. 结论部分紧扣精度、效率和对其他移动接触系统的推广性。
 
-The paper's section flow is:
+原文的章节流是：
 
-- Abstract: problem, FEM limitation, proposed free-interface CMS, residual modes, interface load coordinates, validation.
-- 1 Introduction: moving-contact motivation, FEM cost, modal-only limitation, static correction modes, SMS/ALE/PMOR comparison, contribution and section roadmap.
-- 2 Free-interface CMS of moving contact multibodies:
-  - 2.1 FFR kinematics for moving contact bodies.
-  - 2.2 convergence criterion separating low-frequency dynamic modes and high-frequency quasi-static modes.
-  - 2.3 mode set: kept normal modes plus residual modes driven by interface loads.
-  - 2.4 residual-mode calculation by static attachment response minus retained modal static contribution.
-- 3 Simplification of equations of motion: coordinates, energy terms, mass/stiffness simplifications, final DAE form.
-- 4 Efficient solution for ILCs and computational flowchart: direct update of interface load coordinates and implementation workflow.
-- 5 Contact algorithm: candidate contact pair detection, boundary detection, force/equivalent nodal load calculation.
-- 6 Numerical examples:
-  - static completeness verification,
-  - frequency truncation criterion,
-  - contact algorithm verification,
-  - dynamic verification against FEM/ALE,
-  - high-speed gear traveling-wave application.
-- 7 Conclusions: restate method, numerical evidence, efficiency gain, broader applications.
+- 摘要：问题背景、全阶 FEM 局限、自由界面 CMS、剩余模态、界面载荷坐标、验证结果。
+- 第 1 节 引言：移动接触动机、FEM 成本、仅用低阶模态的局限、静态修正模态、SMS/ALE/PMOR 对比、本文贡献和章节安排。
+- 第 2 节 移动接触多体系统的自由界面 CMS：
+  - 2.1 移动接触柔性体的 FFR 运动学。
+  - 2.2 将低频动态模态和高频准静态模态分开的收敛判据。
+  - 2.3 模态集合：保留的正规模态加由界面载荷驱动的剩余模态。
+  - 2.4 剩余模态计算：全静态附着响应减去保留模态的静态贡献。
+- 第 3 节 运动方程简化：坐标、能量项、质量和刚度矩阵简化、最终 DAE 形式。
+- 第 4 节 ILC 高效求解和计算流程：界面载荷坐标的直接更新与实现流程图。
+- 第 5 节 接触算法：候选接触对检测、边界检测、接触力和等效节点载荷计算。
+- 第 6 节 数值算例：静态完备性、频率截断准则、接触算法验证、与 FEM/ALE 的动态验证、高速齿轮行波应用。
+- 第 7 节 结论：方法回顾、数值证据、效率提升、对其他移动接触系统的应用前景。
 
-The reusable template is therefore: theory first, algorithm second, contact treatment third, validation matrix last.
+因此，本文可复用的写作模板是：先理论推导，再算法实现，再接触处理，最后用验证矩阵支撑每一个主张。
 
-## 2. Proposed Paper Title
+## 2. 拟定论文题目
+
+面向自适应模态接触动力学的 SDF 驱动补丁剩余界面载荷坐标方法
+
+英文备选题目：
 
 SDF-Driven Patch Residual Interface Load Coordinates for Adaptive Modal Contact Dynamics
 
-## 3. Abstract Outline
+## 3. 摘要大纲
 
-Paragraph role: problem and gap.
+第一段：问题与缺口。
 
-- Moving contact in flexible multibody systems needs local surface compliance and high-gradient contact response.
-- Full FEM captures these effects but is too expensive for repeated contact-state changes.
-- Standard low-mode ROMs miss local compliance; ordinary static modes recover it but enlarge the dynamic basis or switch modes.
+- 柔性多体系统中的移动接触需要同时描述整体动力学和局部表面柔度。
+- 全阶 FEM 可以捕捉局部接触响应，但在接触状态反复变化时计算成本过高。
+- 标准低阶 ROM 难以表示局部接触柔度；普通静态修正模态虽然能恢复局部响应，却会扩大动态基或引入模态切换问题。
 
-Paragraph role: method.
+第二段：本文方法。
 
-- Propose a patch residual interface load coordinate method.
-- Low free-interface modes represent global deformation.
-- Patch residual modes recover local quasi-static contact response.
-- SDF-driven active patch detection maps moving contact samples to patch ILCs.
-- Multi-scale patch activation smooths contact transitions without adding alpha to the main DAE state.
+- 提出补丁剩余界面载荷坐标方法。
+- 低阶自由界面模态用于表示整体变形。
+- 补丁剩余模态用于恢复局部准静态接触响应。
+- SDF 驱动的活动补丁检测将移动接触采样映射到补丁 ILC。
+- 多尺度补丁激活在不把 alpha 加入主 DAE 状态的前提下平滑接触转移。
 
-Paragraph role: evidence.
+第三段：验证证据。
 
-- Static completeness, compliance recovery, quasi-static indentation, moving contact smoothness, small full-FEM dynamics, and large-case performance are validated.
-- Phase 9 ablation gates verify A-E variants and six paper claims.
+- 通过静态完备性、柔度恢复、准静态压入、移动接触平滑性、小规模全阶 FEM 动力学和大规模性能代理进行验证。
+- Phase 9 消融验证覆盖 A-E 五种变体，并通过六项论文主张门控。
 
-## 4. Section-by-Section Outline
+## 4. 分章节大纲
 
-### 1 Introduction
+### 1 引言
 
-1. Moving-contact flexible bodies need both global dynamics and local surface response.
-2. Full FEM is accurate but too costly when the contact area moves over a fine surface.
-3. Low-mode ROMs are efficient but cannot represent local contact compliance.
-4. Ordinary static correction modes restore local response but increase the dynamic coordinate set or require switching.
-5. Existing alternatives such as static mode switching, ALE contact reduction, and parametric MOR reduce some costs but still introduce basis-update, smoothness, or parameterization issues.
-6. This paper proposes patch residual ILCs driven by SDF contact samples, keeping the dynamic DAE dimension independent of active contact nodes.
-7. Contributions:
-   - patch residual modes for local contact compliance,
-   - alpha/ILC layer outside the dynamic state,
-   - SDF-to-active-patch projection,
-   - online residual coupling,
-   - multi-scale patch activation with overlap and warm start,
-   - validation and ablation claim gates.
-8. Paper roadmap.
+1. 移动接触柔性体需要同时保留整体动力学响应和局部表面响应。
+2. 全阶 FEM 精度高，但当接触区域在细分表面上移动时，时间积分和接触搜索成本很高。
+3. 低阶模态 ROM 计算高效，但不能准确表达局部接触柔度。
+4. 普通静态修正模态可以恢复局部响应，但会增加动态坐标数量，或者需要在接触区域变化时切换模态。
+5. 静态模态切换、ALE 接触降阶、参数化 MOR 等方法可以降低部分成本，但仍存在基更新、接触平滑性或参数覆盖问题。
+6. 本文提出由 SDF 接触采样驱动的补丁剩余 ILC，在活动接触节点数量变化时保持主 DAE 维度不变。
+7. 本文贡献：
+   - 构造用于局部接触柔度恢复的补丁剩余模态。
+   - 将 alpha/ILC 层放在动态状态之外。
+   - 建立 SDF 到活动补丁集合的投影关系。
+   - 实现在线剩余耦合。
+   - 引入带重叠、滞回和暖启动的多尺度补丁激活。
+   - 用验证矩阵和消融门控支撑论文主张。
+8. 给出全文结构安排。
 
-### 2 Patch Residual ILC Formulation for Moving Contact Flexible Bodies
+### 2 移动接触柔性体的补丁剩余 ILC 公式
 
-#### 2.1 Flexible body kinematics and reduced coordinates
+#### 2.1 柔性体运动学与降阶坐标
 
-- Define full displacement field and retained modal coordinates.
-- Separate the main dynamic state from contact/interface load coordinates.
-- State the core design principle: alpha is an interface/load coordinate, not a DAE state variable.
+- 定义全阶位移场和保留的模态坐标。
+- 将主动态状态与接触/界面载荷坐标分开。
+- 明确核心设计原则：alpha 是界面载荷坐标，不是 DAE 状态变量。
 
-Expected figure:
+预期图：
 
-- `method_pipeline.png`: FEM mesh -> surface patches -> patch load basis -> residual ILC -> SDF active set -> claim gate.
+- `method_pipeline.png`：FEM 网格 -> 表面补丁 -> 补丁载荷基 -> 剩余 ILC -> SDF 活动集合 -> 主张门控。
 
-#### 2.2 Convergence criterion for local contact response
+#### 2.2 局部接触响应的收敛判据
 
-- Follow Yao's logic: low-frequency modes carry global dynamics; omitted high-frequency modes contribute quasi-statically under localized contact loads.
-- Explain why local contact compliance cannot converge with low modes alone.
-- Define the target static attachment response for each patch load.
+- 沿用 Yao 论文的逻辑：低频模态承担整体动力学，被截断的高频模态在局部接触载荷下主要体现为准静态贡献。
+- 说明为什么仅用低阶模态无法收敛到准确的局部接触柔度。
+- 为每一个补丁载荷定义目标静态附着响应。
 
-Expected table:
+预期表：
 
-- `static_completeness.csv`: per-patch static reconstruction error.
+- `static_completeness.csv`：各补丁的静态重构误差。
 
-#### 2.3 Patch load basis and interface load coordinates
+#### 2.3 补丁载荷基与界面载荷坐标
 
-- Partition the surface into patches.
-- Build area-weighted normal patch load bases.
-- Define active patch set and alpha vector.
-- Explain how patch-level ILCs reduce node-level interface scale.
+- 将接触表面划分为若干补丁。
+- 构造面积加权的法向补丁载荷基。
+- 定义活动补丁集合和 alpha 向量。
+- 说明补丁级 ILC 如何降低节点级界面坐标规模。
 
-Expected evidence:
+预期证据：
 
-- Claim 3: multi-scale patch alpha DOFs = 40 versus node-level contact DOFs = 69.
+- 主张 3：多尺度补丁 alpha 自由度为 40，节点级接触自由度为 69。
 
-#### 2.4 Patch residual modes
+#### 2.4 补丁剩余模态
 
-- Define full static response `G_B`.
-- Define retained modal static contribution.
-- Define residual modes as the difference between full static attachment response and modal static contribution.
-- Explain static completeness: modal static contribution plus residual response reconstructs full static attachment response.
+- 定义全阶静态响应 `G_B`。
+- 定义保留模态的静态贡献。
+- 将剩余模态定义为全阶静态附着响应与保留模态静态贡献之差。
+- 说明静态完备性：模态静态贡献加剩余响应可以重构全阶静态附着响应。
 
-Expected table:
+预期表：
 
-- `compliance_error.csv`: low-mode compliance error, residual ILC error, compressed residual error.
+- `compliance_error.csv`：低阶模态柔度误差、剩余 ILC 误差、压缩剩余模态误差。
 
-### 3 Equations of Motion and DAE-Dimension Invariance
+### 3 运动方程与 DAE 维度不变性
 
-#### 3.1 Dynamic state without alpha
+#### 3.1 不含 alpha 的动态状态
 
-- Define reduced displacement/velocity/acceleration in retained modal coordinates.
-- State that alpha contributes only through recovered residual deformation/contact correction.
+- 用保留模态坐标定义降阶位移、速度和加速度。
+- 说明 alpha 只通过恢复的剩余变形或接触修正发挥作用，不进入主动态状态。
 
-#### 3.2 Online residual coupling
+#### 3.2 在线剩余耦合
 
-- Show contact residual projection into patch alpha.
-- Show how residual deformation is recovered from active residual blocks.
-- Explain frozen-alpha or tangent-style iteration used in the current implementation.
+- 给出接触残差到补丁 alpha 的投影。
+- 给出由活动剩余块恢复局部变形的方式。
+- 说明当前实现中采用的冻结 alpha 或切线式迭代处理。
 
-#### 3.3 DAE dimension argument
+#### 3.3 DAE 维度论证
 
-- Compare:
-  - low modes only,
-  - ordinary patch static modes as dynamic modes,
-  - patch residual ILC.
-- Emphasize that ordinary static modes increase dynamic DOFs, while residual ILC keeps the main DAE dimension unchanged.
+- 对比三类模型：
+  - 仅低阶模态。
+  - 将普通补丁静态模态作为动态模态加入。
+  - 补丁剩余 ILC。
+- 强调普通静态模态会增加动态自由度，而剩余 ILC 保持主 DAE 维度不变。
 
-Expected evidence:
+预期证据：
 
-- Claim 5: DAE independence flag = 1; residual dynamic DOF ratio vs ordinary static modes = 0.0769231.
+- 主张 5：DAE independence flag = 1；相对普通静态模态的 residual dynamic DOF ratio = 0.0769231。
 
-### 4 Efficient Active ILC Solution and Multi-Scale Patch Activation
+### 4 活动 ILC 高效求解与多尺度补丁激活
 
-#### 4.1 SDF contact sample to patch ILC projection
+#### 4.1 SDF 接触采样到补丁 ILC 的投影
 
-- Detect contact samples with SDF queries.
-- Map closest surface triangles to primary patches.
-- Aggregate normal contact forces into patch alpha.
-- Verify total force and normal-force consistency.
+- 通过 SDF 查询检测接触采样点。
+- 将最近表面三角形映射到主补丁。
+- 将法向接触力聚合到补丁 alpha。
+- 验证总力守恒和法向力一致性。
 
-#### 4.2 Adaptive active patch management
+#### 4.2 自适应活动补丁管理
 
-- Current contact patches must activate.
-- Neighbor patches activate for one-ring smoothness.
-- Hysteresis and deactivation delay prevent discontinuous active-set changes.
-- Alpha warm start smooths transitions.
+- 当前接触补丁必须激活。
+- 邻域补丁用于一环平滑。
+- 滞回和延迟失活用于避免活动集合不连续跳变。
+- alpha 暖启动用于平滑补丁切换。
 
-#### 4.3 Multi-scale patch activation
+#### 4.3 多尺度补丁激活
 
-- Coarse patches provide global safeguard.
-- Medium patches cover current contact neighborhoods.
-- Fine overlap patches activate when projection error/contact force gradient is large.
-- Partition-of-unity weights distribute force across overlapping patches.
+- 粗补丁提供全局兜底。
+- 中尺度补丁覆盖当前接触邻域。
+- 当投影误差或接触力梯度较大时激活细尺度重叠补丁。
+- 用 partition-of-unity 权重在重叠补丁之间分配接触力。
 
-Expected figure/table:
+预期图表：
 
 - `patch_hierarchy.png`
 - `active_patch_history.png`
 - `active_patch_history.csv`
 
-### 5 Contact Treatment
+### 5 接触处理
 
-#### 5.1 SDF-based contact detection
+#### 5.1 基于 SDF 的接触检测
 
-- Define query points, closest surface triangles, gaps, normals, and penetration.
-- Explain why SDF/BVH-style queries are suitable for arbitrary exterior surfaces.
+- 定义查询点、最近表面三角形、间隙、法向和穿透量。
+- 说明 SDF/BVH 查询适合任意外表面的移动接触检测。
 
-#### 5.2 Force projection and penalty calibration
+#### 5.2 力投影与 penalty 标定
 
-- Convert pressure/penetration to normal nodal or patch loads.
-- Use area weighting to align penalty units with pressure-overclosure contact.
-- State relation to CalculiX-aligned validation from earlier project phases.
+- 将 pressure/penetration 转换为法向节点载荷或补丁载荷。
+- 使用面积加权使 penalty 单位与 pressure-overclosure 接触关系一致。
+- 说明与前序阶段 CalculiX 对齐验证之间的关系。
 
-#### 5.3 Contact boundary smoothness
+#### 5.3 接触边界平滑性
 
-- Explain boundary-crossing force jump, gap jump, and alpha jump metrics.
-- Use moving contact over patch boundaries as the main smoothness test.
+- 定义跨补丁边界时的接触力跳变、间隙跳变和 alpha 跳变指标。
+- 将接触点跨越补丁边界作为主要平滑性测试。
 
-Expected evidence:
+预期证据：
 
 - moving force jump = 0.019911
 - moving gap jump = 0.00897824
 - energy drift excess ratio = 0.954554
 
-### 6 Numerical Examples and Claim-Gated Validation
+### 6 数值算例与主张门控验证
 
-#### 6.1 Static completeness verification
+#### 6.1 静态完备性验证
 
-Purpose: prove residual modes recover the exact static attachment response.
+目的：证明剩余模态可以恢复精确的静态附着响应。
 
-Metrics:
+指标：
 
-- maximum static completeness error,
-- residual compliance error,
-- compressed residual compliance error.
+- 最大静态完备性误差。
+- 剩余柔度误差。
+- 压缩剩余模态柔度误差。
 
-Expected results:
+预期结果：
 
 - max completeness error = 2.180325e-17
 - compressed residual compliance error = 2.456128e-02
 
-#### 6.2 Quasi-static indentation verification
+#### 6.2 准静态压入验证
 
-Purpose: prove local contact stiffness is recovered.
+目的：证明局部接触刚度可以被恢复。
 
-Models:
+对比模型：
 
-- low modes only,
-- low modes plus ordinary patch static modes,
-- low modes plus patch residual ILC.
+- 仅低阶模态。
+- 低阶模态加普通补丁静态模态。
+- 低阶模态加补丁剩余 ILC。
 
-Metrics:
+指标：
 
-- force-displacement curve,
-- local indentation,
-- patch compliance,
-- gap,
-- contact region size,
-- active DOFs.
+- 力-位移曲线。
+- 局部压入量。
+- 补丁柔度。
+- 间隙。
+- 接触区域大小。
+- 活动自由度数量。
 
-Expected figure/table:
+预期图表：
 
 - `force_displacement_curve.png`
 - `contact_force_error.csv`
 
-#### 6.3 Moving contact verification
+#### 6.3 移动接触验证
 
-Purpose: prove SDF active patch detection works across patch boundaries.
+目的：证明 SDF 活动补丁检测可以处理跨补丁边界的移动接触。
 
-Metrics:
+指标：
 
-- contact force continuity,
-- gap continuity,
-- active patch count,
-- runtime ratio,
-- energy drift.
+- 接触力连续性。
+- 间隙连续性。
+- 活动补丁数量。
+- 运行时间比例。
+- 能量漂移。
 
-Expected results:
+预期结果：
 
-- force jump < 5%;
-- gap jump < 5%;
-- adaptive energy drift not higher than full active-patch baseline.
+- force jump < 5%。
+- gap jump < 5%。
+- 自适应活动补丁的能量漂移不高于全活动补丁基准。
 
-#### 6.4 Small full-FEM dynamic comparison
+#### 6.4 小规模全阶 FEM 动力学对比
 
-Purpose: provide a small full-FEM time-history reference without relying on large-scale full FEM.
+目的：在可控规模上提供全阶 FEM 时程参考，而不是只依赖大规模全阶 FEM 代理。
 
-Metrics:
+指标：
 
-- displacement RMSE,
-- velocity RMSE,
-- contact force peak error,
-- contact impulse error,
-- measured wall-time runtime ratio,
-- solver-dimension speedup.
+- 位移 RMSE。
+- 速度 RMSE。
+- 接触力峰值误差。
+- 接触冲量误差。
+- 实测 wall-time 运行时间比例。
+- 求解器维度加速比。
 
-Expected results:
+预期结果：
 
 - displacement RMSE = 6.448974e-06
 - velocity RMSE = 6.706009e-04
@@ -279,103 +278,103 @@ Expected results:
 - impulse error = 0
 - solver-dimension speedup = 6.292217x
 
-#### 6.5 Large performance verification
+#### 6.5 大规模性能验证
 
-Purpose: show scaling behavior without running large full-FEM time history.
+目的：在不运行大规模全阶 FEM 时程的情况下展示方法的规模化行为。
 
-Compare:
+对比对象：
 
-- baseline modal-SDF,
-- patch residual ILC,
-- node-level ILC estimate,
-- coarse-only patch,
-- multi-scale patch.
+- baseline modal-SDF。
+- patch residual ILC。
+- node-level ILC 估计。
+- coarse-only patch。
+- multi-scale patch。
 
-Expected table/figure:
+预期图表：
 
 - `runtime_scaling.csv`
 - `runtime_scaling.png`
 
-#### 6.6 Ablation study and claim gate
+#### 6.6 消融研究与主张门控
 
-Required ablations:
+必要消融组：
 
-- A: only low free-interface modes.
-- B: low modes + ordinary patch static modes as dynamic modes.
-- C: low modes + patch residual ILC.
-- D: low modes + SDF-driven active patch residual ILC.
-- E: multi-scale patch residual ILC.
+- A：仅低阶自由界面模态。
+- B：低阶模态 + 普通补丁静态模态作为动态模态。
+- C：低阶模态 + 补丁剩余 ILC。
+- D：低阶模态 + SDF 驱动活动补丁剩余 ILC。
+- E：多尺度补丁剩余 ILC。
 
-Required claims:
+必要主张：
 
-- Claim 1: low modes alone cannot represent local contact compliance.
-- Claim 2: patch residual modes recover local quasi-static contact response.
-- Claim 3: patch-level ILC reduces node-level ILC scale.
-- Claim 4: SDF active patch detection handles moving contact across arbitrary surfaces.
-- Claim 5: ILC does not enter the main DAE variables.
-- Claim 6: multi-scale activation improves the accuracy/efficiency balance.
+- 主张 1：仅低阶模态无法表示局部接触柔度。
+- 主张 2：补丁剩余模态可以恢复局部准静态接触响应。
+- 主张 3：补丁级 ILC 比节点级 ILC 规模更小。
+- 主张 4：SDF 活动补丁检测可以处理任意表面的移动接触。
+- 主张 5：ILC 不进入主 DAE 变量。
+- 主张 6：多尺度激活改善精度与效率平衡。
 
-Expected outputs:
+预期输出：
 
 - `ablation_summary.csv`
 - `claim_gate.csv`
 - `patch_ilc_claims.md`
 
-### 7 Conclusions
+### 7 结论
 
-Paragraph role: method recap.
+第一段：方法回顾。
 
-- Patch residual ILC separates global dynamics from local contact compliance.
-- SDF active patch projection enables moving contact over arbitrary exterior surfaces.
-- Multi-scale activation improves patch-level accuracy/efficiency.
+- 补丁剩余 ILC 将整体动力学和局部接触柔度分离。
+- SDF 活动补丁投影支持任意外表面上的移动接触。
+- 多尺度激活提高补丁级表示的精度与效率平衡。
 
-Paragraph role: evidence recap.
+第二段：证据回顾。
 
-- Static completeness and compliance recovery are verified.
-- Moving contact has bounded force and gap jumps.
-- Small full-FEM dynamics and large-case performance proxies support the method.
-- Phase 9 claim gate passes all six claims.
+- 静态完备性和柔度恢复已经验证。
+- 移动接触中的力跳变和间隙跳变受到约束。
+- 小规模全阶 FEM 动力学和大规模性能代理支撑该方法。
+- Phase 9 主张门控通过全部六项主张。
 
-Paragraph role: limitations and future work.
+第三段：局限与未来工作。
 
-- Current method focuses on frictionless normal contact.
-- Future work should extend to frictional tangential basis, nonlinear material/contact laws, stronger external FEM benchmarks, and larger industrial geometry.
+- 当前方法主要聚焦无摩擦法向接触。
+- 后续工作应扩展到摩擦切向基、非线性材料/接触律、更强的外部 FEM 基准，以及更大规模的工业几何模型。
 
-## 5. Figure and Table Plan
+## 5. 图表计划
 
-### Figures
+### 图
 
-1. `method_pipeline.png`: method overview.
-2. `patch_hierarchy.png`: coarse/medium/fine patch hierarchy.
-3. `force_displacement_curve.png`: quasi-static indentation ablation.
-4. `active_patch_history.png`: moving contact active patch count and force.
-5. `runtime_scaling.png`: runtime proxy comparison.
+1. `method_pipeline.png`：方法总览。
+2. `patch_hierarchy.png`：粗/中/细补丁层级。
+3. `force_displacement_curve.png`：准静态压入消融。
+4. `active_patch_history.png`：移动接触中的活动补丁数量和接触力。
+5. `runtime_scaling.png`：运行时间代理对比。
 
-### Tables
+### 表
 
-1. `static_completeness.csv`: patch static reconstruction.
-2. `compliance_error.csv`: compliance recovery.
-3. `contact_force_error.csv`: indentation and dynamic force errors.
-4. `runtime_scaling.csv`: scalability comparison.
-5. `ablation_summary.csv`: A-E ablation matrix.
-6. `claim_gate.csv`: six claim pass/fail evidence.
+1. `static_completeness.csv`：补丁静态重构。
+2. `compliance_error.csv`：柔度恢复。
+3. `contact_force_error.csv`：压入和动态接触力误差。
+4. `runtime_scaling.csv`：规模化能力对比。
+5. `ablation_summary.csv`：A-E 消融矩阵。
+6. `claim_gate.csv`：六项主张的通过/失败证据。
 
-## 6. Claim-Evidence Map
+## 6. 主张-证据映射
 
-| Claim | Evidence | Status |
+| 主张 | 证据 | 状态 |
 | --- | --- | --- |
-| Low modes alone cannot represent local contact compliance. | Quasi-static low-mode force error = 0.831666. | Supported |
-| Patch residual modes recover local quasi-static response. | Static completeness error = 2.180325e-17; residual force error = 0. | Supported |
-| Patch-level ILC reduces node-level scale. | Patch alpha DOFs = 40 vs node-level contact DOFs = 69. | Supported |
-| SDF active patch detection handles moving contact. | Force jump = 0.019911; gap jump = 0.00897824; requested patches = 8. | Supported |
-| ILC does not enter the main DAE state. | DAE independence flag = 1; dynamic DOF ratio vs ordinary modes = 0.0769231. | Supported |
-| Multi-scale activation improves accuracy/efficiency balance. | Multi-scale projection error = 0.269226 vs single-scale = 0.299569; active fraction = 0.240964. | Supported |
+| 仅低阶模态无法表示局部接触柔度。 | quasi-static low-mode force error = 0.831666。 | 已支撑 |
+| 补丁剩余模态可以恢复局部准静态响应。 | static completeness error = 2.180325e-17；residual force error = 0。 | 已支撑 |
+| 补丁级 ILC 降低节点级规模。 | patch alpha DOFs = 40，node-level contact DOFs = 69。 | 已支撑 |
+| SDF 活动补丁检测可以处理移动接触。 | force jump = 0.019911；gap jump = 0.00897824；requested patches = 8。 | 已支撑 |
+| ILC 不进入主 DAE 状态。 | DAE independence flag = 1；dynamic DOF ratio vs ordinary modes = 0.0769231。 | 已支撑 |
+| 多尺度激活改善精度与效率平衡。 | multi-scale projection error = 0.269226，single-scale = 0.299569；active fraction = 0.240964。 | 已支撑 |
 
-## 7. Self-Review Checklist
+## 7. 自查清单
 
-- Does the introduction end with a clear bottleneck: local contact response without DAE growth?
-- Are residual modes defined as full static attachment response minus retained modal static contribution?
-- Is alpha consistently described as an interface load coordinate rather than a dynamic state?
-- Does every abstract/introduction claim map to a Phase 8 or Phase 9 output?
-- Are all figures and tables necessary for the six claims?
-- Are limitations explicit enough: frictionless normal contact, prototype-scale dynamic FEM comparison, future industrial validation?
+- 引言是否以明确瓶颈收束：在不增加 DAE 规模的前提下恢复局部接触响应？
+- 剩余模态是否被定义为全阶静态附着响应减去保留模态静态贡献？
+- alpha 是否始终被描述为界面载荷坐标，而不是动态状态？
+- 摘要和引言中的每个主张是否都能映射到 Phase 8 或 Phase 9 输出？
+- 所有图表是否都服务于六项核心主张？
+- 局限性是否足够明确：无摩擦法向接触、原型规模动态 FEM 对比、未来工业规模验证？

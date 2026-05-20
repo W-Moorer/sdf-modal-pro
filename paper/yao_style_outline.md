@@ -401,7 +401,10 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 3. `force_displacement_curve.png`：准静态压入消融。
 4. `active_patch_history.png`：移动接触中的活动补丁数量和接触力。
 5. `runtime_scaling.png`：运行时间代理对比。
-6. `three_way_dynamic_comparison.png`：项目内全阶 FEM、自适应 ROM、CalculiX 外部 FEM 的位移/接触力时程对比。
+6. `sdf_patch_projection_map.png`：SDF 接触采样映射到活动补丁 ILC 的算例证据。
+7. `three_way_dynamic_displacement.png`：线性动力学三方位移时程对比。
+8. `three_way_nonlinear_contact_displacement.png`：非线性接触三方位移时程对比。
+9. `three_way_nonlinear_contact_activity.png`：非线性接触穿透量和接触力活动证据。
 
 ### 表
 
@@ -411,19 +414,21 @@ SDF-Driven Patch Residual Interface Load Coordinates for Arbitrary-Surface Movin
 4. `contact_force_error.csv`：压入和动态接触力误差。
 5. `runtime_scaling.csv`：规模化能力对比。
 6. `ablation_summary.csv`：A-E 消融矩阵。
-7. `claim_gate.csv`：核心主张的通过/失败证据。
+7. `sdf_patch_projection.csv`：单补丁、双补丁边界和无接触三类 SDF->patch ILC 映射算例。
+8. `three_way_external_fem.csv`：项目内全阶 FEM、自适应 ROM、CalculiX 外部 FEM 三方验证算例。
+9. `claim_gate.csv`：核心主张的通过/失败证据。
 
 ## 7. 主张-证据映射
 
 | 主张 | 证据 | 状态 |
 | --- | --- | --- |
-| SDF 接触采样可以稳定映射到活动补丁。 | 接触采样、最近三角形、活动补丁和总法向力一致性检查。 | 需在正式实验中强化 |
+| SDF 接触采样可以稳定映射到活动补丁。 | `sdf_patch_projection.csv` 覆盖单补丁、双补丁边界和无接触三类算例；活动补丁数匹配预期，总力/法向力/力矩误差 < 1e-12，动态维度贡献为 0。 | 已补充 |
 | 仅低阶模态无法表示局部接触柔度。 | quasi-static low-mode force error = 0.831666。 | 已支撑 |
 | 补丁载荷驱动的剩余模态可以恢复局部准静态响应。 | static completeness error = 2.180325e-17；residual force error = 0。 | 已支撑 |
 | 补丁级 ILC 降低节点级规模。 | patch alpha DOFs = 40，node-level contact DOFs = 69。 | 已支撑 |
 | 活动补丁 ILC 不进入主 DAE，活动集合变化时主动态系统维度保持不变。 | DAE independence flag = 1；dynamic DOF ratio vs ordinary modes = 0.0769231。 | 已支撑 |
 | 多尺度重叠补丁激活改善跨补丁边界连续性和精度/效率平衡。 | force jump = 0.019911；gap jump = 0.00897824；multi-scale projection error = 0.269226，single-scale = 0.299569。 | 已支撑 |
-| 三方验证说明结果不是同源 FEM/ROM 自证。 | 项目内全阶 FEM、自适应 ROM、CalculiX 外部 FEM 的位移和接触力曲线对比。 | 需在正式实验中强化 |
+| 三方验证说明结果不是同源 FEM/ROM 自证。 | `three_way_external_fem.csv` 覆盖线性动力学和 CalculiX 非线性 surface-to-surface contact；线性三方位移相对误差 < 5%，非线性接触矩阵一致性 < 1e-10，pressure-overclosure 标定误差 < 1e-6。 | 已补充 |
 
 ## 8. 自查清单
 

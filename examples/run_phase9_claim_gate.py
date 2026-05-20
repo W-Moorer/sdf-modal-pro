@@ -21,13 +21,24 @@ def main() -> None:
     print(f"multi-scale projection error: {result.summary['multi_scale_projection_error']:.6e}")
     print(f"node-level contact dofs: {result.summary['node_level_contact_dofs']}")
     print(f"multi-scale patch alpha dofs: {result.summary['multi_scale_patch_alpha_dofs']}")
+    print(
+        "sdf projection evidence cases: "
+        f"{result.summary['sdf_projection_cases_passed']} / {result.summary['sdf_projection_cases']}"
+    )
+    print(
+        "three-way external FEM cases: "
+        f"{result.summary['three_way_external_cases_passed']} / {result.summary['three_way_external_cases']}"
+    )
     print(f"wrote {output_dir / 'tables' / 'ablation_summary.csv'}")
+    print(f"wrote {output_dir / 'tables' / 'sdf_patch_projection.csv'}")
+    print(f"wrote {output_dir / 'tables' / 'three_way_external_fem.csv'}")
     print(f"wrote {output_dir / 'tables' / 'claim_gate.csv'}")
     print(f"wrote {output_dir / 'figures' / 'method_pipeline.png'}")
     print(f"wrote {output_dir / 'figures' / 'patch_hierarchy.png'}")
     print(f"wrote {output_dir / 'figures' / 'force_displacement_curve.png'}")
     print(f"wrote {output_dir / 'figures' / 'active_patch_history.png'}")
     print(f"wrote {output_dir / 'figures' / 'runtime_scaling.png'}")
+    print(f"wrote {output_dir / 'figures' / 'sdf_patch_projection_map.png'}")
     print(f"wrote {output_dir / 'logs' / 'patch_ilc_claims.md'}")
 
 

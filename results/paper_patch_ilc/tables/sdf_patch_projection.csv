@@ -1,0 +1,4 @@
+case,sample_count,expected_active_patch_count,active_patch_count,active_patch_ids,alpha_dimension,dynamic_dimension_contribution,total_normal_force,projected_alpha_sum,total_force_error,total_normal_force_error,total_moment_error,gate_threshold,passed
+single_patch_probe,1,1,1,4,1,0,0.5000000000000004,0.5000000000000004,0.0,0.0,0.0,active_count=expected; force/normal/moment errors < 1e-12; dynamic contribution = 0,1
+two_patch_boundary_probe,2,2,2,4 5,2,0,1.0000000000000009,1.0000000000000009,0.0,0.0,0.0,active_count=expected; force/normal/moment errors < 1e-12; dynamic contribution = 0,1
+outside_surface_no_contact,0,0,0,,0,0,0.0,0.0,0.0,0.0,0.0,active_count=expected; force/normal/moment errors < 1e-12; dynamic contribution = 0,1

@@ -44,6 +44,18 @@ unit assignment.
 python examples/run_patch_hierarchy.py
 ```
 
+## Phase 3 Patch Load Basis
+
+The third roadmap phase builds one frictionless normal load basis per surface
+patch. Nodal loads are area-weighted within the patch, aligned with the patch
+average normal, and normalized to unit resultant force. Diagnostics check
+resultant direction, non-negative nodal weights, support locality, basis
+conditioning, and cross-patch correlation.
+
+```powershell
+python examples/run_patch_load_basis.py
+```
+
 ## Modules
 
 ```text
@@ -52,6 +64,7 @@ modal_contact_rom/
   modal_basis/           constrained generalized eigenmodes
   surface_patch/         outer surface extraction, samples, patch hierarchy
   contact_modes/         patch normal loads and static flexibility modes
+  modal_ilc/             reduced state, patch ILCs, load basis, recovery
   reduced_dynamics/      mass orthonormalization and reduced static solve
   sdf_query/             simple triangle-mesh signed distance prototype
   adaptive_activation/   nearest patch activation helper

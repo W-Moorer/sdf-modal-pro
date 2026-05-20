@@ -128,6 +128,16 @@ prototype-independent Phase-8 gate.
 python examples/run_phase8_validation_matrix.py
 ```
 
+## Phase 9 Ablation And Claim Gate
+
+The ninth roadmap phase turns the validation matrix into paper-facing evidence.
+It runs the required A-E ablations, checks the six patch-ILC claims, and writes
+the aim-specified tables, figures, and claim log under `results/paper_patch_ilc`.
+
+```powershell
+python examples/run_phase9_claim_gate.py
+```
+
 ## Modules
 
 ```text

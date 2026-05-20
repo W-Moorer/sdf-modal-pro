@@ -1,0 +1,4 @@
+case,low_modes_only_error,ordinary_patch_static_modes_error,patch_residual_ilc_error,coarse_only_error,single_scale_sdf_active_error,multi_scale_sdf_active_error,displacement_rmse,velocity_rmse,contact_force_peak_error,contact_impulse_error
+quasi_static_indentation,0.8316661004869473,0.0,0.0,,,,,,,
+sdf_moving_contact_projection,,,,0.6704314056477877,0.29956925379494953,0.26922608348159655,,,,
+small_full_fem_dynamic,,,,,,,6.448973755930164e-06,0.0006706008679263545,0.0,0.0

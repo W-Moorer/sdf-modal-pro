@@ -1,0 +1,6 @@
+ablation,model,quasi_static_force_error,static_mean_compliance_error,dynamic_dofs,ilc_alpha_dofs,max_active_patch_count,runtime_proxy,claim_role
+A,only_low_free_interface_modes,0.8316661004869473,0.3090729456790716,2,0,0,8.0,negative control for Claim 1
+B,low_modes_plus_ordinary_patch_static_modes,0.0,0.0,26,0,24,17576.0,accurate but expands the dynamic basis
+C,low_modes_plus_patch_residual_ilc,0.0,0.0,2,24,24,32.0,residual ILC recovers patch static response without entering DAE
+D,low_modes_plus_sdf_active_patch_residual_ilc,0.29956925379494953,0.0,2,8,8,72.0,SDF active-set proof for moving contact
+E,multi_scale_patch_residual_ilc,0.26922608348159655,0.0,2,32,32,1032.0,multi-scale accuracy/efficiency tradeoff

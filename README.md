@@ -8,12 +8,13 @@ Adding surface patch contact modes improves local surface compliance compared
 with a basis that only contains low-frequency vibration modes.
 ```
 
-The first version is intentionally standalone. It uses Python, NumPy, SciPy,
-and optional meshio input. The default example generates a small cantilever
-block mesh, builds a positive-definite spring-lattice K/M system, extracts the
-outer surface, partitions it into patches, solves one static contact mode per
-patch, mass-orthonormalizes the combined basis, and compares reduced static
-compliance errors.
+The first version uses Python, NumPy, SciPy, and optional meshio input. The
+default example generates a small cantilever block mesh, builds a
+positive-definite spring-lattice K/M system, extracts the outer surface,
+partitions it into patches, solves one static contact mode per patch,
+mass-orthonormalizes the combined basis, and compares reduced static
+compliance errors. Newer dynamic validation paths can assemble true HEX8 FEM
+matrices through the vendored `sfc` package copied from `sdf-fem-pro/src/sfc`.
 
 ## Run
 
@@ -42,6 +43,7 @@ modal_contact_rom/
   sdf_query/             simple triangle-mesh signed distance prototype
   adaptive_activation/   nearest patch activation helper
   validation/            compliance error validation
+sfc/                     vendored SFC FEM/SDF/contact kernels
 ```
 
 ## Test
@@ -73,18 +75,21 @@ python examples/visualize_second_version.py
 ```
 
 For an external-solver accuracy check, run a three-way comparison between
-Python full-order FEM, adaptive ROM, and WSL CalculiX direct full-order FEM:
+Python full-order FEM, projected ROM, and WSL CalculiX direct full-order FEM:
 
 ```powershell
 python examples/compare_three_way_dynamics.py
 ```
 
-The nonlinear contact three-way check first aligns Python full-order FEM
+The nonlinear contact three-way check first aligns SFC-assembled Python
+full-order FEM
 against a CalculiX `*CONTACT PAIR` full-order run, then compares CalculiX
-full-order contact, Python full-order contact, and adaptive ROM contact. The
+full-order contact, Python full-order contact, and projected ROM contact. The
 CalculiX input uses surface-to-surface contact, and the Python full-order path
 uses the same pressure-overclosure stiffness with surface quadrature, contact
-tangent, and implicit Newton iterations before the ROM result is evaluated:
+tangent, and implicit Newton iterations. The projected ROM uses the same
+contact residual and tangent, so the three curves isolate modal truncation
+instead of contact-discretization mismatch:
 
 ```powershell
 python examples/compare_three_way_contact_dynamics.py

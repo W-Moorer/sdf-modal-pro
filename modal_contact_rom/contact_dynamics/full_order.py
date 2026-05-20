@@ -343,6 +343,160 @@ class CalculixAlignedFullFEMContactSimulator:
         )
 
 
+class CalculixAlignedROMContactSimulator:
+    """Projected ROM using the same contact residual as the aligned full model."""
+
+    def __init__(
+        self,
+        fem: FEMSystem,
+        basis: np.ndarray,
+        rigid_plane: PrescribedRigidPlane,
+        contact_stiffness: float,
+        rayleigh_alpha: float = 0.0,
+        rayleigh_beta: float = 0.0,
+        external_force: np.ndarray | Callable[[float], np.ndarray] | None = None,
+        hht_alpha: float = 0.0,
+        max_iterations: int = 20,
+        tolerance: float = 1.0e-11,
+    ) -> None:
+        if contact_stiffness <= 0.0:
+            raise ValueError("contact_stiffness must be positive")
+        if not (-1.0 / 3.0 <= hht_alpha <= 0.0):
+            raise ValueError("hht_alpha must lie in [-1/3, 0]")
+        basis_array = np.asarray(basis, dtype=float)
+        if basis_array.ndim != 2 or basis_array.shape[0] != fem.mesh.n_dofs:
+            raise ValueError(f"basis must have shape ({fem.mesh.n_dofs}, n_modes)")
+        if basis_array.shape[1] == 0:
+            raise ValueError("basis must contain at least one mode")
+        self.fem = fem
+        self.basis = basis_array
+        self.rigid_plane = rigid_plane
+        self.contact_stiffness = float(contact_stiffness)
+        self.rayleigh_alpha = float(rayleigh_alpha)
+        self.rayleigh_beta = float(rayleigh_beta)
+        self.hht_alpha = float(hht_alpha)
+        self.max_iterations = int(max_iterations)
+        self.tolerance = float(tolerance)
+        self.external_force = external_force
+        if external_force is not None and not callable(external_force):
+            external_force_array = np.asarray(external_force, dtype=float)
+            if external_force_array.shape != (fem.mesh.n_dofs,):
+                raise ValueError(f"external_force must have shape ({fem.mesh.n_dofs},)")
+            self.external_force = external_force_array
+        self._contact_faces = _plane_aligned_hex_boundary_faces(fem.mesh.nodes, fem.mesh.elements, rigid_plane.normal)
+        if self._contact_faces.size == 0:
+            raise ValueError("no exterior HEX8 faces align with the contact plane normal")
+
+    def run(self, dt: float, steps: int) -> FullFEMSimulationResult:
+        if dt <= 0.0:
+            raise ValueError("dt must be positive")
+        if steps < 1:
+            raise ValueError("steps must be positive")
+
+        basis = self.basis
+        Kr = np.asarray(basis.T @ (self.fem.K @ basis), dtype=float)
+        Mr = np.asarray(basis.T @ (self.fem.M @ basis), dtype=float)
+        Cr = self.rayleigh_alpha * Mr + self.rayleigh_beta * Kr
+        alpha = self.hht_alpha
+        beta = 0.25 * (1.0 - alpha) ** 2
+        gamma = 0.5 - alpha
+
+        q = np.zeros(basis.shape[1], dtype=float)
+        qd = np.zeros_like(q)
+        u = basis @ q
+        contact0 = self._contact(u)
+        fext0 = self._external_force(0.0)
+        qdd = la.solve(Mr, basis.T @ (fext0 + contact0.vector - self.fem.K @ u), assume_a="sym")
+        previous_static = Kr @ q + Cr @ qd - basis.T @ (fext0 + contact0.vector)
+
+        history: list[FullFEMContactStep] = []
+        displacement_history: list[np.ndarray] = []
+        velocity_history: list[np.ndarray] = []
+        external_work = 0.0
+        contact_work = 0.0
+        previous_external_force = fext0
+
+        for step_id in range(steps):
+            load_time = (step_id + 1) * dt
+            previous_u = basis @ q
+            current_external_force = self._external_force(load_time)
+            reduced_external = basis.T @ current_external_force
+
+            q_predict = q + dt * qd + dt * dt * (0.5 - beta) * qdd
+            qd_predict = qd + dt * (1.0 - gamma) * qdd
+            c0 = 1.0 / (beta * dt * dt)
+            c1 = gamma / (beta * dt)
+            q_guess = q_predict.copy()
+
+            for _iteration in range(max(1, self.max_iterations)):
+                u_guess = basis @ q_guess
+                contact = self._contact(u_guess)
+                a_guess = c0 * (q_guess - q_predict)
+                v_guess = qd_predict + gamma * dt * a_guess
+                static = Kr @ q_guess + Cr @ v_guess - reduced_external - basis.T @ contact.vector
+                residual = Mr @ a_guess + (1.0 + alpha) * static - alpha * previous_static
+                contact_tangent = np.asarray(basis.T @ (contact.tangent @ basis), dtype=float)
+                tangent = Mr * c0 + (Kr + Cr * c1 + contact_tangent) * (1.0 + alpha)
+                correction = la.solve(0.5 * (tangent + tangent.T), -residual, assume_a="sym")
+                q_guess += correction
+                if np.linalg.norm(correction) <= self.tolerance * max(1.0, np.linalg.norm(q_guess)):
+                    break
+
+            q = q_guess
+            qdd = c0 * (q - q_predict)
+            qd = qd_predict + gamma * dt * qdd
+            u = basis @ q
+            v = basis @ qd
+            contact = self._contact(u)
+            previous_static = Kr @ q + Cr @ qd - basis.T @ (current_external_force + contact.vector)
+
+            displacement_history.append(u.copy())
+            velocity_history.append(v.copy())
+            displacement_increment = u - previous_u
+            contact_work += float(contact.vector @ displacement_increment)
+            external_work += float(0.5 * (previous_external_force + current_external_force) @ displacement_increment)
+            previous_external_force = current_external_force
+            kinetic = 0.5 * float(qd @ (Mr @ qd))
+            elastic = 0.5 * float(q @ (Kr @ q))
+            mechanical = kinetic + elastic + contact.energy
+            history.append(
+                FullFEMContactStep(
+                    time=float(load_time),
+                    min_gap=contact.min_gap,
+                    max_penetration=contact.max_penetration,
+                    normal_force=contact.normal_force,
+                    kinetic_energy=kinetic,
+                    elastic_energy=elastic,
+                    contact_work=contact_work,
+                    external_work=external_work,
+                    energy_balance_error=mechanical - external_work,
+                )
+            )
+
+        return FullFEMSimulationResult(history, basis @ q, basis @ qd, np.asarray(displacement_history), np.asarray(velocity_history))
+
+    def _external_force(self, time: float) -> np.ndarray:
+        if self.external_force is None:
+            return np.zeros(self.fem.mesh.n_dofs, dtype=float)
+        if callable(self.external_force):
+            force = np.asarray(self.external_force(time), dtype=float)
+        else:
+            force = np.asarray(self.external_force, dtype=float)
+        if force.shape != (self.fem.mesh.n_dofs,):
+            raise ValueError(f"external_force must have shape ({self.fem.mesh.n_dofs},)")
+        return force
+
+    def _contact(self, displacement: np.ndarray) -> _QuadraturePlaneContact:
+        return _surface_quadrature_plane_contact(
+            self.fem.mesh.nodes,
+            self._contact_faces,
+            displacement,
+            point=self.rigid_plane.point,
+            normal=self.rigid_plane.normal,
+            stiffness=self.contact_stiffness,
+        )
+
+
 _HEX8_FACE_NODE_IDS = (
     (0, 1, 2, 3),
     (4, 7, 6, 5),

@@ -5,13 +5,14 @@ import numpy as np
 from modal_contact_rom.contact_dynamics import (
     AdaptiveModalContactSimulator,
     CalculixAlignedFullFEMContactSimulator,
+    CalculixAlignedROMContactSimulator,
     FullFEMContactSimulator,
     PrescribedRigidPlane,
     PrescribedRigidSphere,
     patch_mode_dict,
 )
 from modal_contact_rom.contact_modes import build_patch_normal_loads, solve_patch_contact_modes
-from modal_contact_rom.fem_io import cantilever_block, write_cantilever_plane_contact_dynamic_input
+from modal_contact_rom.fem_io import cantilever_block, sfc_cantilever_block, write_cantilever_plane_contact_dynamic_input
 from modal_contact_rom.modal_basis import compute_low_modes
 from modal_contact_rom.reduced_dynamics import compute_craig_bampton_basis, mass_orthonormalize
 from modal_contact_rom.surface_patch import SurfacePatch, extract_surface, partition_surface_patches
@@ -123,6 +124,46 @@ def test_calculix_aligned_full_fem_plane_contact_uses_surface_quadrature() -> No
     assert max(step.max_penetration for step in result.steps) > 0.0
     assert result.steps[-1].external_work > 0.0
     assert all(np.isfinite(step.energy_balance_error) for step in result.steps)
+
+
+def test_sfc_cantilever_block_assembles_hex8_fem_matrices() -> None:
+    fem = sfc_cantilever_block(nx=1, ny=1, nz=1, young_modulus=1000.0, poisson_ratio=0.3, density=1.0)
+
+    assert fem.K.shape == (fem.mesh.n_dofs, fem.mesh.n_dofs)
+    assert fem.M.shape == fem.K.shape
+    assert fem.K.nnz > 0
+    assert fem.M.nnz > 0
+    assert fem.free_dofs.size > 0
+    np.testing.assert_allclose((fem.K - fem.K.T).toarray(), 0.0, atol=1.0e-10)
+    np.testing.assert_allclose((fem.M - fem.M.T).toarray(), 0.0, atol=1.0e-12)
+
+
+def test_calculix_aligned_rom_matches_full_when_basis_spans_free_dofs() -> None:
+    fem = sfc_cantilever_block(nx=1, ny=1, nz=1, length=1.0, width=1.0, height=1.0)
+    top_nodes = np.flatnonzero(np.isclose(fem.mesh.nodes[:, 2], fem.mesh.nodes[:, 2].max()))
+    free_top_nodes = np.setdiff1d(top_nodes, fem.fixed_nodes, assume_unique=False)
+    force = np.zeros(fem.mesh.n_dofs, dtype=float)
+    force[3 * free_top_nodes + 2] = 2.0
+    plane = PrescribedRigidPlane(point=np.array([0.0, 0.0, 0.51]), normal=np.array([0.0, 0.0, 1.0]))
+    external = lambda time: force * min(time / 0.02, 1.0)
+
+    full = CalculixAlignedFullFEMContactSimulator(
+        fem=fem,
+        rigid_plane=plane,
+        contact_stiffness=100.0,
+        external_force=external,
+    ).run(dt=0.002, steps=20)
+    basis = np.eye(fem.mesh.n_dofs)[:, fem.free_dofs]
+    rom = CalculixAlignedROMContactSimulator(
+        fem=fem,
+        basis=basis,
+        rigid_plane=plane,
+        contact_stiffness=100.0,
+        external_force=external,
+    ).run(dt=0.002, steps=20)
+
+    np.testing.assert_allclose(rom.displacement_history, full.displacement_history, rtol=1.0e-10, atol=1.0e-12)
+    np.testing.assert_allclose(rom.velocity_history, full.velocity_history, rtol=1.0e-10, atol=1.0e-12)
 
 
 def test_calculix_contact_writer_can_emit_surface_to_surface(tmp_path) -> None:

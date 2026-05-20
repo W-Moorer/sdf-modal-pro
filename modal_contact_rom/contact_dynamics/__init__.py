@@ -6,6 +6,7 @@ from modal_contact_rom.contact_dynamics.rigid import (
 )
 from modal_contact_rom.contact_dynamics.full_order import (
     CalculixAlignedFullFEMContactSimulator,
+    CalculixAlignedROMContactSimulator,
     FullFEMContactSimulator,
     FullFEMContactStep,
     FullFEMSimulationResult,
@@ -28,6 +29,7 @@ __all__ = [
     "AdaptiveModalContactSimulator",
     "AdaptiveSimulationResult",
     "CalculixAlignedFullFEMContactSimulator",
+    "CalculixAlignedROMContactSimulator",
     "ContactEvaluation",
     "FullFEMContactSimulator",
     "FullFEMContactStep",

@@ -18,10 +18,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from modal_contact_rom.contact_dynamics import (
-    AdaptiveModalContactSimulator,
     CalculixAlignedFullFEMContactSimulator,
+    CalculixAlignedROMContactSimulator,
     PrescribedRigidPlane,
-    patch_mode_dict,
 )
 from modal_contact_rom.contact_modes import build_patch_normal_loads, solve_patch_contact_modes
 from modal_contact_rom.fem_io import (
@@ -31,6 +30,7 @@ from modal_contact_rom.fem_io import (
     read_matrix_storage,
     read_node_print_displacements,
     run_ccx_wsl,
+    sfc_cantilever_block,
     write_cantilever_matrix_storage_input,
     write_cantilever_plane_contact_dynamic_input,
 )
@@ -76,7 +76,20 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
     )
     run_ccx_wsl(matrix_job, workdir)
     matrices = read_matrix_storage(matrix_job, workdir)
-    fem = matrix_storage_to_fem_system(seed.mesh, matrices)
+    calculix_matrix_fem = matrix_storage_to_fem_system(seed.mesh, matrices)
+    fem = sfc_cantilever_block(
+        nx=2,
+        ny=1,
+        nz=1,
+        length=2.0,
+        width=1.0,
+        height=1.0,
+        young_modulus=young_modulus,
+        poisson_ratio=poisson_ratio,
+        density=density,
+        mass_kind="consistent",
+    )
+    matrix_alignment = compare_fem_matrices(fem, calculix_matrix_fem)
 
     surface = extract_surface(fem.mesh)
     patches = partition_surface_patches(surface, bins=(1, 1))
@@ -136,21 +149,16 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         fem.mesh.dof_indices(interface_nodes),
         num_fixed_interface_modes=4,
     )
-    base_basis = mass_orthonormalize(fem.M, np.column_stack((cb.basis, low.modes)))
-    rom = AdaptiveModalContactSimulator(
+    base_basis = mass_orthonormalize(fem.M, np.column_stack((cb.basis, low.modes, contact_modes.modes)))
+    rom = CalculixAlignedROMContactSimulator(
         fem=fem,
-        surface=surface,
-        patches=patches,
-        base_basis=base_basis,
-        patch_modes=patch_mode_dict(contact_modes.patch_ids, contact_modes.modes),
-        rigid_sphere=rigid_plane,
-        penalty=python_contact_penalty,
-        contact_damping=python_contact_damping,
+        basis=base_basis,
+        rigid_plane=rigid_plane,
+        contact_stiffness=python_contact_penalty,
         rayleigh_alpha=rayleigh_alpha,
         rayleigh_beta=rayleigh_beta,
-        activation_count=2,
-        activation_radius=1.4,
         external_force=external_force,
+        hht_alpha=0.0,
     ).run(dt=dt, steps=steps)
 
     rom_vs_full = compare_dynamic_results(full, rom)
@@ -170,6 +178,8 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "matrix_storage_input": str(workdir / f"{matrix_job}.inp"),
         "nonlinear_contact_input": str(workdir / f"{contact_job}.inp"),
         "calculix_contact_type": "surface-to-surface",
+        "python_fem_backend": "vendored sfc package",
+        "sfc_matrix_vs_calculix_matrix_storage": matrix_alignment,
         "plane_z": plane_z,
         "top_patch_id": int(top_patch.patch_id),
         "top_patch_key": list(top_patch.key),
@@ -179,18 +189,19 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "python_contact_penalty": python_contact_penalty,
         "python_contact_damping": python_contact_damping,
         "python_contact_model": "surface quadrature pressure-overclosure with Newton contact tangent",
-        "python_full_order_solver": "CalculiX-aligned implicit full-order FEM contact",
+        "python_full_order_solver": "SFC-assembled CalculiX-aligned implicit full-order FEM contact",
+        "rom_solver": "SFC-assembled projected ROM with the same surface-quadrature contact tangent",
         "python_contact_penalty_source": "same pressure-overclosure stiffness as the CalculiX surface-to-surface input",
         "top_contact_area_sum": float(np.sum(nodal_contact_areas[top_nodes])),
         "free_top_contact_area_sum": float(np.sum(nodal_contact_areas[free_top_nodes])),
         "upward_force_per_free_top_node": upward_force_per_free_top_node,
         "load_ramp_time": load_ramp_time,
-        "active_rom_base_modes": int(base_basis.shape[1]),
+        "projected_rom_modes": int(base_basis.shape[1]),
         "full_free_dofs": int(fem.free_dofs.size),
         "max_python_full_contact_force": float(max(step.normal_force for step in full.steps)),
-        "max_adaptive_rom_contact_force": float(max(step.normal_force for step in rom.steps)),
+        "max_projected_rom_contact_force": float(max(step.normal_force for step in rom.steps)),
         "max_python_full_penetration": float(max(step.max_penetration for step in full.steps)),
-        "max_adaptive_rom_penetration": float(max(step.max_penetration for step in rom.steps)),
+        "max_projected_rom_penetration": float(max(step.max_penetration for step in rom.steps)),
         "max_calculix_observed_penetration": max_calculix_observed_penetration(calculix_history, top_nodes, seed.mesh.nodes, plane_z),
         "calculix_contact_stress_blocks": int(calculix_contact["block_count"]),
         "calculix_contact_stress_rows": int(calculix_contact["row_count"]),
@@ -200,14 +211,28 @@ def run_three_way_contact_benchmark() -> dict[str, object]:
         "calculix_output_pressure_overclosure_lsq_slope": float(calculix_contact["equivalent_pressure_stiffness"]),
         "calculix_output_max_pressure_overclosure_ratio": float(calculix_contact["max_pressure_overclosure_ratio"]),
         "python_full_vs_calculix": asdict(full_vs_calculix),
-        "adaptive_rom_vs_python_full": asdict(rom_vs_full),
-        "adaptive_rom_vs_calculix": asdict(rom_vs_calculix),
+        "projected_rom_vs_python_full": asdict(rom_vs_full),
+        "projected_rom_vs_calculix": asdict(rom_vs_calculix),
         "full_order_alignment_figure": str(full_order_figure),
         "displacement_figure": str(displacement_figure),
         "contact_activity_figure": str(contact_figure),
     }
     (workdir / "three_way_contact_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
+
+
+def compare_fem_matrices(fem, reference_fem) -> dict[str, float]:
+    free = fem.free_dofs
+    return {
+        "stiffness_free_dof_relative_l2": relative_l2(
+            reference_fem.K[free, :][:, free].toarray(),
+            fem.K[free, :][:, free].toarray(),
+        ),
+        "mass_free_dof_relative_l2": relative_l2(
+            reference_fem.M[free, :][:, free].toarray(),
+            fem.M[free, :][:, free].toarray(),
+        ),
+    }
 
 
 def plot_full_order_alignment(
@@ -249,7 +274,7 @@ def plot_three_way_top_displacement(
     fig, ax = plt.subplots(figsize=(9.5, 5.0), constrained_layout=True)
     ax.plot(ccx_time, ccx, label="CalculiX nonlinear contact full FEM", linewidth=2.1)
     ax.plot(time, py, "--", label="Python full FEM contact", linewidth=1.8)
-    ax.plot(time, reduced, ":", label="Adaptive ROM contact", linewidth=2.2)
+    ax.plot(time, reduced, ":", label="Projected ROM contact", linewidth=2.2)
     ax.set_xlabel("time")
     ax.set_ylabel("top-node Uz")
     ax.set_title(f"Nonlinear contact three-way displacement, node {node_id + 1}")
@@ -314,12 +339,12 @@ def plot_contact_activity(
     fig, axes = plt.subplots(2, 1, figsize=(9.5, 7.0), sharex=True, constrained_layout=True)
     axes[0].plot(ccx_time, ccx_penetration, label="CalculiX observed penetration", linewidth=2.1)
     axes[0].plot(time, full_penetration, "--", label="Python full FEM penetration", linewidth=1.8)
-    axes[0].plot(time, rom_penetration, ":", label="Adaptive ROM penetration", linewidth=2.2)
+    axes[0].plot(time, rom_penetration, ":", label="Projected ROM penetration", linewidth=2.2)
     axes[0].set_ylabel("max top penetration")
     axes[0].grid(True, alpha=0.35)
     axes[0].legend(fontsize=8)
     axes[1].plot(time, full_force, "--", label="Python full FEM normal force", linewidth=1.8)
-    axes[1].plot(time, rom_force, ":", label="Adaptive ROM normal force", linewidth=2.2)
+    axes[1].plot(time, rom_force, ":", label="Projected ROM normal force", linewidth=2.2)
     axes[1].set_xlabel("time")
     axes[1].set_ylabel("normal contact force")
     axes[1].grid(True, alpha=0.35)

@@ -16,4 +16,4 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["modal_contact_rom*"]
+include = ["modal_contact_rom*", "sfc*"]

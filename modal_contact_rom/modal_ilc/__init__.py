@@ -1,5 +1,15 @@
 """Patch-ILC residual correction layer."""
 
+from modal_contact_rom.modal_ilc.adaptive_patch import (
+    AdaptivePatchActivationConfig,
+    AdaptivePatchActivationState,
+    AdaptivePatchILCProjector,
+    AdaptivePatchSequenceResult,
+    AdaptivePatchStepResult,
+    expand_patch_ids_with_neighbors,
+    run_adaptive_patch_sequence,
+    write_adaptive_patch_tables,
+)
 from modal_contact_rom.modal_ilc.ilc_projection import ActivePatchSet, project_contact_force_to_ilc
 from modal_contact_rom.modal_ilc.online_coupling import (
     OnlineReducedDynamicIteration,
@@ -48,6 +58,11 @@ from modal_contact_rom.modal_ilc.sdf_projection import (
 
 __all__ = [
     "ActivePatchSet",
+    "AdaptivePatchActivationConfig",
+    "AdaptivePatchActivationState",
+    "AdaptivePatchILCProjector",
+    "AdaptivePatchSequenceResult",
+    "AdaptivePatchStepResult",
     "ContactSampleSet",
     "OnlineReducedDynamicIteration",
     "OnlineReducedDynamicState",
@@ -67,6 +82,7 @@ __all__ = [
     "build_normal_patch_load_bases",
     "compliance_errors",
     "detect_sdf_contact_samples",
+    "expand_patch_ids_with_neighbors",
     "load_basis_condition_number",
     "load_basis_correlation_matrix",
     "load_basis_gram",
@@ -76,6 +92,7 @@ __all__ = [
     "project_contact_samples_to_patch_ilc",
     "recover_residual_deformation",
     "recover_total_deformation",
+    "run_adaptive_patch_sequence",
     "solve_static_load_responses",
     "solve_online_residual_dynamic_step",
     "solve_online_residual_contact_step",
@@ -84,6 +101,7 @@ __all__ = [
     "total_nodal_force",
     "total_nodal_moment",
     "write_ilc_projection_tables",
+    "write_adaptive_patch_tables",
     "write_patch_load_basis_tables",
     "write_patch_residual_tables",
 ]

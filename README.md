@@ -31,13 +31,26 @@ To generate validation plots and surface diagnostic clouds:
 python examples/visualize_first_version.py
 ```
 
+## Phase 2 Patch Hierarchy
+
+The second roadmap phase adds an explicit outer-surface hierarchy:
+volume mesh boundary faces are converted to surface samples, then grouped into
+coarse and medium patch levels. Each level stores triangle-to-patch assignment
+weights, patch adjacency, coverage, and area diagnostics. The overlap medium
+level uses partition-of-unity weights so every surface triangle still sums to a
+unit assignment.
+
+```powershell
+python examples/run_patch_hierarchy.py
+```
+
 ## Modules
 
 ```text
 modal_contact_rom/
   fem_io/                mesh data, meshio loading, generated block K/M
   modal_basis/           constrained generalized eigenmodes
-  surface_patch/         outer surface extraction and patch partitioning
+  surface_patch/         outer surface extraction, samples, patch hierarchy
   contact_modes/         patch normal loads and static flexibility modes
   reduced_dynamics/      mass orthonormalization and reduced static solve
   sdf_query/             simple triangle-mesh signed distance prototype

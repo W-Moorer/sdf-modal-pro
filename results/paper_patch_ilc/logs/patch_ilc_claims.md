@@ -20,7 +20,7 @@ Claims passed: 8 / 8
 - Claim 5 [PASS]: Active patch ILC alpha does not enter the main DAE state as the active contact set changes. Metric dae_dimension_independence_and_dynamic_dof_ratio=1;0.0769231 threshold 1; < 1.
 - Claim 6 [PASS]: Multi-scale overlapping patch activation handles moving contact over patch boundaries, including a warped triangular surface case. Metric force_jump_gap_jump_unique_requested_patches_multi_error_single_error_active_fraction_runtime_ratio_complex_cases=0.019911;0.00897824;8;0.269226;0.299569;0.240964;0.239992;1 / 1 threshold < 0.05; < 0.05; > 1; multi <= single; active/runtime < 0.35; all complex surface cases pass.
 - Claim 7 [PASS]: Three-way FEM evidence shows the result is not only Python full-FEM/ROM self-consistency. Metric three_way_external_case_pass_count=2 / 2 threshold linear and nonlinear external FEM evidence cases pass.
-- Claim 8 [PASS]: The implementation now has measured performance evidence from cached SDF mapping and active patch evaluation. Metric performance_optimization_case_pass_count=2 / 2 threshold all performance optimization evidence cases pass.
+- Claim 8 [PASS]: The implementation now has measured performance evidence from cached SDF mapping and active patch evaluation. Metric performance_optimization_case_pass_count=3 / 3 threshold all performance optimization evidence cases pass.
 
 ## Evidence Tables
 

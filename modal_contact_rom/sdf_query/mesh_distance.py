@@ -30,26 +30,107 @@ def query_signed_distances(points: np.ndarray, surface: SurfaceMesh) -> SignedDi
     distances = np.empty(points.shape[0], dtype=float)
     closest_points = np.empty_like(points)
     triangle_indices = np.empty(points.shape[0], dtype=np.int64)
+    if points.shape[0] == 0:
+        return SignedDistanceResult(distances, closest_points, triangle_indices)
 
     tris = surface.nodes[surface.triangles]
-    for point_id, point in enumerate(points):
-        best_dist2 = np.inf
-        best_point = None
-        best_tri = -1
-        for tri_id, triangle in enumerate(tris):
-            candidate = _closest_point_on_triangle(point, triangle[0], triangle[1], triangle[2])
-            dist2 = float(np.sum((point - candidate) ** 2))
-            if dist2 < best_dist2:
-                best_dist2 = dist2
-                best_point = candidate
-                best_tri = tri_id
-        assert best_point is not None
-        sign = 1.0 if np.dot(point - best_point, surface.normals[best_tri]) >= 0.0 else -1.0
-        distances[point_id] = sign * float(np.sqrt(best_dist2))
-        closest_points[point_id] = best_point
-        triangle_indices[point_id] = best_tri
+    a = tris[:, 0]
+    b = tris[:, 1]
+    c = tris[:, 2]
+    candidates = _closest_points_on_triangle_batch(points, a, b, c)
+    deltas = points[:, None, :] - candidates
+    dist2 = np.einsum("ijk,ijk->ij", deltas, deltas)
+    triangle_indices[:] = np.argmin(dist2, axis=1)
+    point_ids = np.arange(points.shape[0], dtype=np.int64)
+    closest_points[:] = candidates[point_ids, triangle_indices]
+    signed_offsets = np.einsum("ij,ij->i", points - closest_points, surface.normals[triangle_indices])
+    signs = np.where(signed_offsets >= 0.0, 1.0, -1.0)
+    distances[:] = signs * np.sqrt(dist2[point_ids, triangle_indices])
 
     return SignedDistanceResult(distances, closest_points, triangle_indices)
+
+
+def _closest_points_on_triangle_batch(points: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
+    ab = b - a
+    ac = c - a
+    point_count = points.shape[0]
+    triangle_count = a.shape[0]
+    closest = np.empty((point_count, triangle_count, 3), dtype=float)
+    assigned = np.zeros((point_count, triangle_count), dtype=bool)
+
+    a3 = a[None, :, :]
+    b3 = b[None, :, :]
+    c3 = c[None, :, :]
+    ab3 = ab[None, :, :]
+    ac3 = ac[None, :, :]
+    p3 = points[:, None, :]
+
+    ap = p3 - a3
+    d1 = np.sum(ab3 * ap, axis=2)
+    d2 = np.sum(ac3 * ap, axis=2)
+    mask = (d1 <= 0.0) & (d2 <= 0.0)
+    _assign_triangle_vertices(closest, assigned, mask, a)
+
+    bp = p3 - b3
+    d3 = np.sum(ab3 * bp, axis=2)
+    d4 = np.sum(ac3 * bp, axis=2)
+    mask = (~assigned) & (d3 >= 0.0) & (d4 <= d3)
+    _assign_triangle_vertices(closest, assigned, mask, b)
+
+    vc = d1 * d4 - d3 * d2
+    mask = (~assigned) & (vc <= 0.0) & (d1 >= 0.0) & (d3 <= 0.0)
+    if np.any(mask):
+        rows, cols = np.nonzero(mask)
+        v = d1[rows, cols] / (d1[rows, cols] - d3[rows, cols])
+        closest[rows, cols] = a[cols] + v[:, None] * ab[cols]
+        assigned[rows, cols] = True
+
+    cp = p3 - c3
+    d5 = np.sum(ab3 * cp, axis=2)
+    d6 = np.sum(ac3 * cp, axis=2)
+    mask = (~assigned) & (d6 >= 0.0) & (d5 <= d6)
+    _assign_triangle_vertices(closest, assigned, mask, c)
+
+    vb = d5 * d2 - d1 * d6
+    mask = (~assigned) & (vb <= 0.0) & (d2 >= 0.0) & (d6 <= 0.0)
+    if np.any(mask):
+        rows, cols = np.nonzero(mask)
+        w = d2[rows, cols] / (d2[rows, cols] - d6[rows, cols])
+        closest[rows, cols] = a[cols] + w[:, None] * ac[cols]
+        assigned[rows, cols] = True
+
+    va = d3 * d6 - d5 * d4
+    mask = (~assigned) & (va <= 0.0) & ((d4 - d3) >= 0.0) & ((d5 - d6) >= 0.0)
+    if np.any(mask):
+        rows, cols = np.nonzero(mask)
+        w = (d4[rows, cols] - d3[rows, cols]) / (
+            (d4[rows, cols] - d3[rows, cols]) + (d5[rows, cols] - d6[rows, cols])
+        )
+        closest[rows, cols] = b[cols] + w[:, None] * (c[cols] - b[cols])
+        assigned[rows, cols] = True
+
+    mask = ~assigned
+    if np.any(mask):
+        rows, cols = np.nonzero(mask)
+        denom = 1.0 / (va[rows, cols] + vb[rows, cols] + vc[rows, cols])
+        v = vb[rows, cols] * denom
+        w = vc[rows, cols] * denom
+        closest[rows, cols] = a[cols] + ab[cols] * v[:, None] + ac[cols] * w[:, None]
+
+    return closest
+
+
+def _assign_triangle_vertices(
+    closest: np.ndarray,
+    assigned: np.ndarray,
+    mask: np.ndarray,
+    vertices: np.ndarray,
+) -> None:
+    if not np.any(mask):
+        return
+    rows, cols = np.nonzero(mask)
+    closest[rows, cols] = vertices[cols]
+    assigned[rows, cols] = True
 
 
 def _closest_point_on_triangle(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
@@ -92,4 +173,3 @@ def _closest_point_on_triangle(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: n
     v = vb * denom
     w = vc * denom
     return a + ab * v + ac * w
-

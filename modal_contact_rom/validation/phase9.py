@@ -21,7 +21,7 @@ from modal_contact_rom.modal_ilc import (
     run_adaptive_patch_sequence,
     run_multiscale_adaptive_patch_sequence,
 )
-from modal_contact_rom.sdf_query.mesh_distance import query_signed_distances
+from modal_contact_rom.sdf_query.mesh_distance import _closest_point_on_triangle, query_signed_distances
 from modal_contact_rom.surface_patch import build_patch_hierarchy, extract_surface
 from modal_contact_rom.validation.phase8 import Phase8ValidationMatrix, run_phase8_validation_matrix
 
@@ -422,6 +422,37 @@ def _complex_surface_validation_and_performance_rows() -> tuple[list[Phase9Row],
 
     levels = (coarse, medium, fine_overlap)
 
+    def run_scalar_sdf_kernel() -> tuple[int, float]:
+        triangles = surface.nodes[surface.triangles]
+        point_count = 0
+        checksum = 0.0
+        for points, _areas in frames:
+            for point in points:
+                best_distance = np.inf
+                best_point = None
+                best_triangle_id = -1
+                for triangle_id, triangle in enumerate(triangles):
+                    candidate = _closest_point_on_triangle(point, triangle[0], triangle[1], triangle[2])
+                    distance = float(np.sum((point - candidate) ** 2))
+                    if distance < best_distance:
+                        best_distance = distance
+                        best_point = candidate
+                        best_triangle_id = triangle_id
+                assert best_point is not None
+                sign = 1.0 if np.dot(point - best_point, surface.normals[best_triangle_id]) >= 0.0 else -1.0
+                checksum += sign * float(np.sqrt(best_distance))
+                point_count += 1
+        return point_count, checksum
+
+    def run_vectorized_sdf_kernel() -> tuple[int, float]:
+        point_count = 0
+        checksum = 0.0
+        for points, _areas in frames:
+            query = query_signed_distances(points, surface)
+            point_count += int(query.distances.size)
+            checksum += float(np.sum(query.distances))
+        return point_count, checksum
+
     def run_uncached_detector() -> int:
         sample_count = 0
         for points, areas in frames:
@@ -446,13 +477,35 @@ def _complex_surface_validation_and_performance_rows() -> tuple[list[Phase9Row],
                 sample_count += samples.sample_count
         return sample_count
 
+    scalar_kernel_wall_time, scalar_kernel_result = _median_wall_time(run_scalar_sdf_kernel, repeats=1)
+    vectorized_kernel_wall_time, vectorized_kernel_result = _median_wall_time(run_vectorized_sdf_kernel, repeats=2)
     uncached_wall_time, uncached_samples = _median_wall_time(run_uncached_detector, repeats=2)
     cached_wall_time, cached_samples = _median_wall_time(run_cached_detector, repeats=2)
+    kernel_checksum_error = abs(scalar_kernel_result[1] - vectorized_kernel_result[1]) / max(
+        abs(scalar_kernel_result[1]),
+        1.0e-30,
+    )
+    kernel_speedup = scalar_kernel_wall_time / max(vectorized_kernel_wall_time, 1.0e-30)
     measured_speedup = uncached_wall_time / max(cached_wall_time, 1.0e-30)
     performance_rows = [
         {
+            "case": "exact_vectorized_sdf_kernel",
+            "optimization": "batched point-triangle closest-point evaluation with scalar-reference accuracy",
+            "scalar_reference_wall_time_seconds": float(scalar_kernel_wall_time),
+            "vectorized_wall_time_seconds": float(vectorized_kernel_wall_time),
+            "measured_speedup": float(kernel_speedup),
+            "sample_count_delta": int(abs(int(scalar_kernel_result[0]) - int(vectorized_kernel_result[0]))),
+            "distance_checksum_relative_error": float(kernel_checksum_error),
+            "gate_threshold": "speedup > 5; identical point count; distance checksum relative error < 1e-12",
+            "passed": int(
+                kernel_speedup > 5.0
+                and int(scalar_kernel_result[0]) == int(vectorized_kernel_result[0])
+                and kernel_checksum_error < 1.0e-12
+            ),
+        },
+        {
             "case": "cached_multiscale_sdf_mapping",
-            "optimization": "reuse one signed-distance query across coarse/medium/fine patch levels",
+            "optimization": "reuse one vectorized signed-distance query across coarse/medium/fine patch levels",
             "baseline_sdf_query_count": len(frames) * len(levels),
             "optimized_sdf_query_count": len(frames),
             "uncached_wall_time_seconds": float(uncached_wall_time),
@@ -464,7 +517,7 @@ def _complex_surface_validation_and_performance_rows() -> tuple[list[Phase9Row],
         },
         {
             "case": "optimized_active_patch_sequence",
-            "optimization": "cached SDF mapping plus cached basis maps for active patch projection",
+            "optimization": "vectorized SDF mapping plus cached basis maps and vectorized overlap-alpha aggregation",
             "optimized_active_wall_time_seconds": float(active_wall_time),
             "max_active_patch_count": int(active_result.max_active_patch_count),
             "total_patch_count": int(active_result.total_patch_count),
@@ -960,10 +1013,19 @@ def _plot_complex_surface_case(path: Path, plt) -> None:
 
 def _plot_performance_optimization(path: Path, result: Phase9ClaimGate, plt) -> None:
     rows = list(result.performance_optimization_rows)
+    kernel = next((row for row in rows if row["case"] == "exact_vectorized_sdf_kernel"), None)
     detector = next((row for row in rows if row["case"] == "cached_multiscale_sdf_mapping"), None)
     active = next((row for row in rows if row["case"] == "optimized_active_patch_sequence"), None)
     fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.2), constrained_layout=True)
-    if detector is not None:
+    if kernel is not None:
+        axes[0].bar(
+            ["scalar\nquery", "batched\nquery"],
+            [float(kernel["scalar_reference_wall_time_seconds"]), float(kernel["vectorized_wall_time_seconds"])],
+            color=["#4c78a8", "#59a14f"],
+        )
+        axes[0].set_ylabel("wall time (s)")
+        axes[0].set_title(f"exact SDF kernel speedup {float(kernel['measured_speedup']):.1f}x")
+    elif detector is not None:
         axes[0].bar(
             ["uncached", "cached"],
             [float(detector["uncached_wall_time_seconds"]), float(detector["cached_wall_time_seconds"])],

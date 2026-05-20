@@ -240,10 +240,12 @@ def assemble_sample_lumped_force_vector(mesh: Mesh, surface: SurfaceMesh, sample
     """Distribute each contact sample force equally to its closest triangle nodes."""
 
     force = np.zeros(mesh.n_dofs, dtype=float)
-    for triangle_id, sample_force in zip(samples.triangle_indices, samples.forces):
-        for node_id in surface.triangles[int(triangle_id)]:
-            start = 3 * int(node_id)
-            force[start : start + 3] += sample_force / 3.0
+    if samples.sample_count == 0:
+        return force
+    nodal_force = force.reshape(mesh.n_nodes, 3)
+    triangle_nodes = surface.triangles[samples.triangle_indices].reshape(-1)
+    distributed_forces = np.repeat(samples.forces / 3.0, 3, axis=0)
+    np.add.at(nodal_force, triangle_nodes, distributed_forces)
     return force
 
 

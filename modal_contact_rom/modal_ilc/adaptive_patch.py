@@ -307,9 +307,14 @@ class MultiScaleAdaptivePatchILCProjector:
         self._basis_by_key: dict[int, PatchLoadBasis] = {}
         self._basis_index_by_key: dict[int, int] = {}
         self._basis_by_level: dict[int, dict[int, PatchLoadBasis]] = {}
+        self._patch_ids_by_level: dict[int, np.ndarray] = {}
+        self._directions_by_level: dict[int, np.ndarray] = {}
         flat_index = 0
         for level in self.levels:
             self._basis_by_level[level.level_index] = {basis.patch_id: basis for basis in level.load_bases}
+            patch_ids = np.asarray([patch.patch_id for patch in level.patch_level.patches], dtype=np.int64)
+            self._patch_ids_by_level[level.level_index] = patch_ids
+            self._directions_by_level[level.level_index] = _basis_direction_matrix(level.load_bases, patch_ids)
             for basis in level.load_bases:
                 key = encode_multiscale_patch_id(level.level_index, basis.patch_id)
                 encoded = _basis_with_patch_key(level.name, key, basis)
@@ -393,7 +398,12 @@ class MultiScaleAdaptivePatchILCProjector:
     def _target_alpha_for_level(self, level: MultiScalePatchLevel, samples: ContactSampleSet) -> dict[int, float]:
         basis_by_patch = self._basis_by_level[level.level_index]
         if self.config.use_overlap_weights:
-            return _target_alpha_by_patch_weighted(samples, basis_by_patch, level.patch_level)
+            return _target_alpha_by_patch_weighted(
+                samples,
+                self._patch_ids_by_level[level.level_index],
+                self._directions_by_level[level.level_index],
+                level.patch_level.triangle_weights,
+            )
         return _target_alpha_by_patch(samples, basis_by_patch)
 
     def _needs_fine_refinement(self, samples: ContactSampleSet, medium_error: float) -> bool:
@@ -706,31 +716,35 @@ def _target_alpha_by_patch(samples: ContactSampleSet, basis_by_patch: dict[int, 
 
 def _target_alpha_by_patch_weighted(
     samples: ContactSampleSet,
-    basis_by_patch: dict[int, PatchLoadBasis],
-    patch_level: PatchLevel,
+    patch_ids_by_column: np.ndarray,
+    directions_by_column: np.ndarray,
+    triangle_weights: np.ndarray,
 ) -> dict[int, float]:
-    target: dict[int, float] = {}
     if samples.sample_count == 0:
-        return target
-    patch_ids_by_column = [patch.patch_id for patch in patch_level.patches]
-    directions: dict[int, np.ndarray] = {}
-    for patch_id, basis in basis_by_patch.items():
+        return {}
+    triangle_ids = samples.triangle_indices
+    valid = (triangle_ids >= 0) & (triangle_ids < triangle_weights.shape[0])
+    if not np.any(valid):
+        return {}
+    weights = triangle_weights[triangle_ids[valid]]
+    force_dot = samples.forces[valid] @ directions_by_column.T
+    alpha = np.maximum(weights * force_dot, 0.0).sum(axis=0)
+    active_columns = np.flatnonzero(alpha > 0.0)
+    return {int(patch_ids_by_column[column]): float(alpha[column]) for column in active_columns}
+
+
+def _basis_direction_matrix(load_bases: Sequence[PatchLoadBasis], patch_ids_by_column: np.ndarray) -> np.ndarray:
+    basis_by_patch = {basis.patch_id: basis for basis in load_bases}
+    directions = np.zeros((patch_ids_by_column.size, 3), dtype=float)
+    for column, patch_id in enumerate(patch_ids_by_column):
+        basis = basis_by_patch.get(int(patch_id))
+        if basis is None:
+            continue
         direction = basis.resultant if basis.resultant is not None else total_nodal_force(basis.B_j[:, 0])
         norm = float(np.linalg.norm(direction))
         if norm > 0.0:
-            directions[int(patch_id)] = direction / norm
-    for sample_id, triangle_id in enumerate(samples.triangle_indices):
-        if int(triangle_id) < 0 or int(triangle_id) >= patch_level.triangle_count:
-            continue
-        weights = patch_level.triangle_weights[int(triangle_id)]
-        for column in np.flatnonzero(weights > 0.0):
-            patch_id = int(patch_ids_by_column[int(column)])
-            direction = directions.get(patch_id)
-            if direction is None:
-                continue
-            contribution = float(weights[int(column)] * np.dot(samples.forces[sample_id], direction))
-            target[patch_id] = target.get(patch_id, 0.0) + max(contribution, 0.0)
-    return target
+            directions[column] = direction / norm
+    return directions
 
 
 def _projection_error(

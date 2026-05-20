@@ -412,13 +412,14 @@ Claim-first 开头句：
 - solver-dimension speedup。
 - runtime proxy 和 memory proxy。
 - baseline/optimized SDF query count。
+- exact scalar-reference vs batched SDF kernel speedup。
 - cached-vs-uncached SDF mapping measured speedup。
 - optimized active patch sequence wall time。
 
 写作定位：
 
 - 这是 scalability estimate、active-patch cost analysis 和接触映射内核的实测优化证据，不把小型 Python 原型的全流程 wall time 当作最终工业级全阶 FEM 基准。
-- 性能结论应落在两个硬证据上：一是 cached SDF mapping 将 coarse/medium/fine 三层最近三角形查询从 105 次降到 35 次，实测加速约 3.02x；二是复杂三角网格算例中活动补丁比例为 0.1328，对应 active-vs-full patch runtime proxy speedup = 7.53x。
+- 性能结论应落在三个硬证据上：一是 exact batched SDF kernel 相对标量三角形搜索加速 55.6x，且 distance checksum relative error = 1.03e-15；二是 cached SDF mapping 将 coarse/medium/fine 三层最近三角形查询从 105 次降到 35 次，实测加速约 2.81x；三是复杂三角网格算例中活动补丁比例为 0.1328，对应 active-vs-full patch runtime proxy speedup = 7.53x。
 - 因此最终结论可以突出本文优势：方法不是只降低主 DAE 维度，也降低了移动接触过程中需要评估和更新的局部补丁坐标规模。
 
 预期图表：
@@ -462,7 +463,7 @@ Claim-first 开头句：
 7. `three_way_nonlinear_contact_displacement.png`：非线性接触三方位移时程对比。
 8. `three_way_nonlinear_contact_activity.png`：非线性接触穿透量和接触力活动证据。
 9. `complex_surface_moving_contact.png`：复杂三角网格表面上的移动接触轨迹和接触带。
-10. `performance_optimization.png`：cached SDF mapping 实测加速和活动补丁比例。
+10. `performance_optimization.png`：exact SDF kernel 实测加速和活动补丁比例。
 11. `runtime_scaling.png`：scaling estimate 和活动补丁代价对比。
 
 ### 表
@@ -490,7 +491,7 @@ Claim-first 开头句：
 | 多尺度重叠补丁激活改善跨补丁边界连续性和精度/效率平衡。 | force jump = 0.019911；gap jump = 0.00897824；multi-scale projection error = 0.269226，single-scale = 0.299569。 | 已支撑 |
 | 方法可以处理复杂三角网格外表面上的移动接触，而不只是在规则侧面上有效。 | `complex_surface_moving_contact.csv`：surface triangles = 328，contact-band triangles = 58，normal variation = 47.55 deg，unique requested patches = 54，active patch fraction = 0.1328，multi-scale projection error < coarse-only。 | 已补充 |
 | 三方验证说明结果不是同源 FEM/ROM 自证。 | `three_way_external_fem.csv` 覆盖线性动力学和 CalculiX 非线性 surface-to-surface contact；线性三方位移相对误差 < 5%，非线性接触矩阵一致性 < 1e-10，pressure-overclosure 标定误差 < 1e-6。 | 已补充 |
-| 性能优势不是只靠 proxy，而有接触映射内核实测优化证据。 | `performance_optimization.csv`：cached SDF mapping query count 105 -> 35，measured speedup = 3.023x，sample count delta = 0；active patch fraction = 0.1328，proxy speedup = 7.53x。 | 已补充 |
+| 性能优势不是只靠 proxy，而有接触映射内核实测优化证据。 | `performance_optimization.csv`：exact SDF kernel speedup = 55.6x，distance checksum relative error = 1.03e-15；cached SDF mapping query count 105 -> 35，measured speedup = 2.81x，sample count delta = 0；active patch fraction = 0.1328，proxy speedup = 7.53x。 | 已补充 |
 
 ## 8. 自查清单
 

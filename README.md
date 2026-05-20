@@ -112,6 +112,19 @@ active-patch runtime proxy against full patch activation.
 python examples/run_adaptive_patch_activation.py
 ```
 
+## Phase 8 Validation Matrix
+
+The eighth roadmap phase adds a compact validation matrix that does not require
+a large full-order FEM time history. It combines exact patch static solves,
+compressed residual compliance checks, quasi-static indentation curves, moving
+contact smoothness, a small SFC full-FEM dynamic comparison, and a large-case
+performance proxy. The output includes CSV tables, a Markdown gate summary, and
+force-displacement / active-patch-history figures.
+
+```powershell
+python examples/run_phase8_validation_matrix.py
+```
+
 ## Modules
 
 ```text
@@ -124,7 +137,7 @@ modal_contact_rom/
   reduced_dynamics/      mass orthonormalization and reduced static solve
   sdf_query/             simple triangle-mesh signed distance prototype
   adaptive_activation/   nearest patch activation helper
-  validation/            compliance error validation
+  validation/            compliance, dynamics, and Phase 8 validation matrix
 sfc/                     vendored SFC FEM/SDF/contact kernels
 ```
 

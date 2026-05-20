@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 
 import numpy as np
+import scipy.linalg as la
+import scipy.sparse as sp
 
 from modal_contact_rom.fem_io.mesh import Mesh
 from modal_contact_rom.modal_ilc.ilc_projection import ActivePatchSet
@@ -65,6 +67,70 @@ class OnlineResidualStepResult:
     @property
     def normal_force(self) -> float:
         return float(self.projection.samples.total_normal_force)
+
+
+@dataclass(frozen=True)
+class OnlineReducedDynamicState:
+    state: ReducedState
+    eta_velocity: np.ndarray
+    eta_acceleration: np.ndarray
+    active_set: ActivePatchSet
+
+    def __post_init__(self) -> None:
+        velocity = np.asarray(self.eta_velocity, dtype=float)
+        acceleration = np.asarray(self.eta_acceleration, dtype=float)
+        if velocity.shape != self.state.eta_k.shape:
+            raise ValueError("eta_velocity shape must match state eta_k")
+        if acceleration.shape != self.state.eta_k.shape:
+            raise ValueError("eta_acceleration shape must match state eta_k")
+        object.__setattr__(self, "eta_velocity", velocity)
+        object.__setattr__(self, "eta_acceleration", acceleration)
+
+
+@dataclass(frozen=True)
+class OnlineReducedDynamicIteration:
+    iteration: int
+    active_patch_ids: tuple[int, ...]
+    alpha_update_norm: float
+    eta_update_norm: float
+    reduced_residual_norm: float
+    min_gap: float
+    normal_force: float
+    residual_deformation_norm: float
+
+
+@dataclass(frozen=True)
+class OnlineReducedDynamicStepResult:
+    previous: OnlineReducedDynamicState
+    next: OnlineReducedDynamicState
+    modal_displacement: np.ndarray
+    residual_deformation: np.ndarray
+    displacement: np.ndarray
+    samples: ContactSampleSet
+    projection: PatchILCProjection
+    iterations: tuple[OnlineReducedDynamicIteration, ...]
+    converged: bool
+
+    @property
+    def dynamic_state_dimension(self) -> int:
+        return self.next.state.dynamic_dimension
+
+    @property
+    def final_iteration_residual(self) -> float:
+        if not self.iterations:
+            return 0.0
+        last = self.iterations[-1]
+        return float(max(last.alpha_update_norm, last.eta_update_norm, last.reduced_residual_norm))
+
+    @property
+    def iteration_residual_reduction(self) -> float:
+        if len(self.iterations) < 2:
+            return np.inf
+        first = self.iterations[0]
+        last = self.iterations[-1]
+        initial = max(first.alpha_update_norm, first.eta_update_norm, first.reduced_residual_norm, 1.0e-30)
+        final = max(last.alpha_update_norm, last.eta_update_norm, last.reduced_residual_norm, 1.0e-30)
+        return float(initial / final)
 
 
 def solve_online_residual_contact_step(
@@ -176,6 +242,192 @@ def solve_online_residual_contact_step(
         projection=projection,
         iterations=tuple(iterations),
         converged=converged,
+    )
+
+
+def solve_online_residual_dynamic_step(
+    K: sp.spmatrix,
+    M: sp.spmatrix,
+    mesh: Mesh,
+    surface: SurfaceMesh,
+    patch_level: PatchLevel,
+    retained_modes: np.ndarray,
+    previous: OnlineReducedDynamicState,
+    residual_blocks: Mapping[int, PatchResidualBlock] | Sequence[PatchResidualBlock],
+    load_bases: Sequence[PatchLoadBasis],
+    contact_points: np.ndarray,
+    penalty: float,
+    dt: float,
+    sample_areas: np.ndarray | None = None,
+    external_force: np.ndarray | None = None,
+    contact_offset: float = 0.0,
+    rayleigh_alpha: float = 0.0,
+    rayleigh_beta: float = 0.0,
+    max_iterations: int = 25,
+    tolerance: float = 1.0e-8,
+    relaxation: float = 1.0,
+    include_residual: bool = True,
+) -> OnlineReducedDynamicStepResult:
+    """Solve one reduced Newmark step with online residual-ILC coupling."""
+
+    if dt <= 0.0:
+        raise ValueError("dt must be positive")
+    if max_iterations < 1:
+        raise ValueError("max_iterations must be positive")
+    if not (0.0 < relaxation <= 1.0):
+        raise ValueError("relaxation must be in (0, 1]")
+
+    Psi = np.asarray(retained_modes, dtype=float)
+    if Psi.ndim != 2 or Psi.shape[0] != mesh.n_dofs:
+        raise ValueError("retained_modes must have shape (mesh.n_dofs, n_modes)")
+    if Psi.shape[1] != previous.state.eta_k.size:
+        raise ValueError("previous state eta_k length must match retained_modes columns")
+
+    force_external = np.zeros(mesh.n_dofs, dtype=float) if external_force is None else np.asarray(external_force, dtype=float)
+    if force_external.shape != (mesh.n_dofs,):
+        raise ValueError("external_force must have shape (mesh.n_dofs,)")
+
+    beta = 0.25
+    gamma = 0.5
+    c0 = 1.0 / (beta * dt * dt)
+    c1 = gamma / (beta * dt)
+    q0 = previous.state.eta_k
+    qd0 = previous.eta_velocity
+    qdd0 = previous.eta_acceleration
+    q_predict = q0 + dt * qd0 + dt * dt * (0.5 - beta) * qdd0
+    qd_predict = qd0 + dt * (1.0 - gamma) * qdd0
+
+    Kr = np.asarray(Psi.T @ (K @ Psi), dtype=float)
+    Mr = np.asarray(Psi.T @ (M @ Psi), dtype=float)
+    Cr = rayleigh_alpha * Mr + rayleigh_beta * Kr
+    effective = Mr * c0 + Cr * c1 + Kr
+    effective = 0.5 * (effective + effective.T)
+
+    q_guess = q_predict.copy()
+    active_set = previous.active_set
+    iterations: list[OnlineReducedDynamicIteration] = []
+    projection: PatchILCProjection | None = None
+    samples = ContactSampleSet.empty()
+    residual_deformation = np.zeros(mesh.n_dofs, dtype=float)
+    converged = False
+
+    for iteration in range(max_iterations):
+        residual_deformation = _residual_deformation(residual_blocks, active_set, mesh.n_dofs, include_residual)
+        displacement_guess = Psi @ q_guess + residual_deformation
+        displaced_surface = surface_with_displacement(surface, displacement_guess)
+        samples = detect_sdf_contact_samples(
+            contact_points,
+            displaced_surface,
+            patch_level,
+            penalty=penalty,
+            sample_areas=sample_areas,
+            contact_offset=contact_offset,
+        )
+        projection = project_contact_samples_to_patch_ilc(mesh, displaced_surface, samples, load_bases)
+        next_active_set = _relaxed_active_set(active_set, projection.active_set, relaxation)
+        alpha_update = _active_set_delta_norm(active_set, projection.active_set)
+        solve_residual_deformation = _residual_deformation(
+            residual_blocks,
+            next_active_set,
+            mesh.n_dofs,
+            include_residual,
+        )
+        rhs_force = force_external + projection.projected_force_vector - K @ solve_residual_deformation
+        reduced_rhs = Psi.T @ rhs_force
+        rhs = reduced_rhs - Cr @ qd_predict + (Mr * c0 + Cr * c1) @ q_predict
+        q_next = la.solve(effective, rhs, assume_a="sym")
+        qdd_next = c0 * (q_next - q_predict)
+        qd_next = qd_predict + gamma * dt * qdd_next
+        reduced_residual = Mr @ qdd_next + Cr @ qd_next + Kr @ q_next - reduced_rhs
+        eta_update = float(np.linalg.norm(q_next - q_guess) / max(1.0, np.linalg.norm(q_next)))
+        reduced_residual_norm = float(np.linalg.norm(reduced_residual) / max(1.0, np.linalg.norm(reduced_rhs)))
+        iterations.append(
+            OnlineReducedDynamicIteration(
+                iteration=iteration,
+                active_patch_ids=next_active_set.active_patch_ids,
+                alpha_update_norm=alpha_update,
+                eta_update_norm=eta_update,
+                reduced_residual_norm=reduced_residual_norm,
+                min_gap=_min_gap(samples),
+                normal_force=samples.total_normal_force,
+                residual_deformation_norm=float(np.linalg.norm(solve_residual_deformation)),
+            )
+        )
+        q_guess = q_next
+        active_set = next_active_set
+        if max(alpha_update, eta_update, reduced_residual_norm) <= tolerance:
+            converged = True
+            break
+
+    residual_deformation = _residual_deformation(residual_blocks, active_set, mesh.n_dofs, include_residual)
+    qdd = c0 * (q_guess - q_predict)
+    qd = qd_predict + gamma * dt * qdd
+    modal_displacement = Psi @ q_guess
+    displacement = modal_displacement + residual_deformation
+    displaced_surface = surface_with_displacement(surface, displacement)
+    samples = detect_sdf_contact_samples(
+        contact_points,
+        displaced_surface,
+        patch_level,
+        penalty=penalty,
+        sample_areas=sample_areas,
+        contact_offset=contact_offset,
+    )
+    projection = project_contact_samples_to_patch_ilc(mesh, displaced_surface, samples, load_bases)
+    next_state = OnlineReducedDynamicState(
+        state=ReducedState(previous.state.r, previous.state.theta, q_guess, previous.state.lambda_),
+        eta_velocity=qd,
+        eta_acceleration=qdd,
+        active_set=active_set,
+    )
+    return OnlineReducedDynamicStepResult(
+        previous=previous,
+        next=next_state,
+        modal_displacement=modal_displacement,
+        residual_deformation=residual_deformation,
+        displacement=displacement,
+        samples=samples,
+        projection=projection,
+        iterations=tuple(iterations),
+        converged=converged,
+    )
+
+
+def baseline_reduced_newmark_step(
+    K: sp.spmatrix,
+    M: sp.spmatrix,
+    retained_modes: np.ndarray,
+    previous: OnlineReducedDynamicState,
+    dt: float,
+    external_force: np.ndarray | None = None,
+    rayleigh_alpha: float = 0.0,
+    rayleigh_beta: float = 0.0,
+) -> OnlineReducedDynamicState:
+    """Reduced Newmark step without contact or residual correction."""
+
+    if dt <= 0.0:
+        raise ValueError("dt must be positive")
+    Psi = np.asarray(retained_modes, dtype=float)
+    force_external = np.zeros(Psi.shape[0], dtype=float) if external_force is None else np.asarray(external_force, dtype=float)
+    Kr = np.asarray(Psi.T @ (K @ Psi), dtype=float)
+    Mr = np.asarray(Psi.T @ (M @ Psi), dtype=float)
+    Cr = rayleigh_alpha * Mr + rayleigh_beta * Kr
+    beta = 0.25
+    gamma = 0.5
+    c0 = 1.0 / (beta * dt * dt)
+    c1 = gamma / (beta * dt)
+    q_predict = previous.state.eta_k + dt * previous.eta_velocity + dt * dt * (0.5 - beta) * previous.eta_acceleration
+    qd_predict = previous.eta_velocity + dt * (1.0 - gamma) * previous.eta_acceleration
+    effective = Mr * c0 + Cr * c1 + Kr
+    rhs = Psi.T @ force_external - Cr @ qd_predict + (Mr * c0 + Cr * c1) @ q_predict
+    q_next = la.solve(0.5 * (effective + effective.T), rhs, assume_a="sym")
+    qdd_next = c0 * (q_next - q_predict)
+    qd_next = qd_predict + gamma * dt * qdd_next
+    return OnlineReducedDynamicState(
+        state=ReducedState(previous.state.r, previous.state.theta, q_next, previous.state.lambda_),
+        eta_velocity=qd_next,
+        eta_acceleration=qdd_next,
+        active_set=ActivePatchSet.empty(),
     )
 
 

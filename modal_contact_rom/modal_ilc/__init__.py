@@ -2,8 +2,13 @@
 
 from modal_contact_rom.modal_ilc.ilc_projection import ActivePatchSet, project_contact_force_to_ilc
 from modal_contact_rom.modal_ilc.online_coupling import (
+    OnlineReducedDynamicIteration,
+    OnlineReducedDynamicState,
+    OnlineReducedDynamicStepResult,
     OnlineResidualIteration,
     OnlineResidualStepResult,
+    baseline_reduced_newmark_step,
+    solve_online_residual_dynamic_step,
     solve_online_residual_contact_step,
     surface_with_displacement,
 )
@@ -44,6 +49,9 @@ from modal_contact_rom.modal_ilc.sdf_projection import (
 __all__ = [
     "ActivePatchSet",
     "ContactSampleSet",
+    "OnlineReducedDynamicIteration",
+    "OnlineReducedDynamicState",
+    "OnlineReducedDynamicStepResult",
     "OnlineResidualIteration",
     "OnlineResidualStepResult",
     "PatchILCProjection",
@@ -53,6 +61,7 @@ __all__ = [
     "ReducedState",
     "assemble_load_basis",
     "assemble_sample_lumped_force_vector",
+    "baseline_reduced_newmark_step",
     "build_patch_residual_basis",
     "build_normal_patch_load_basis",
     "build_normal_patch_load_bases",
@@ -68,6 +77,7 @@ __all__ = [
     "recover_residual_deformation",
     "recover_total_deformation",
     "solve_static_load_responses",
+    "solve_online_residual_dynamic_step",
     "solve_online_residual_contact_step",
     "static_completeness_errors",
     "surface_with_displacement",
